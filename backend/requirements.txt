@@ -2,6 +2,6 @@ fastapi
 uvicorn
 python-multipart
 google-generativeai
-pydantic
+pydantic[email]
 sqlalchemy
 psycopg2-binary

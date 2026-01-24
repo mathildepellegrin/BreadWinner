@@ -10,10 +10,17 @@ from pydantic import BaseModel, EmailStr, Field, validator
 import google.generativeai as genai
 from functools import lru_cache
 import logging
+from sqlalchemy.orm import Session
+from database import SessionLocal, engine, get_db
+from models import Base, User, Resume, JobApplication, InterviewSession
+import crud
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
 
 # --- Configuration ---
 class Settings:
@@ -71,23 +78,30 @@ class PrepMaterialsRequest(BaseModel):
 security = HTTPBearer()
 
 # Simple token store (in production, use Redis or a database)
-valid_tokens = set()
+valid_tokens = {}  # token -> user_id mapping
 
-def create_token(user_id: str) -> str:
+def create_token(user_id: int) -> str:
     """Create a simple bearer token (in production, use JWT)"""
     token = str(uuid.uuid4())
-    valid_tokens.add(token)
+    valid_tokens[token] = user_id
     return token
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
-    """Verify bearer token"""
+    """Verify bearer token and return user_id"""
     token = credentials.credentials
     if token not in valid_tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token"
         )
-    return token
+    return valid_tokens[token]
+
+async def get_current_user(user_id: int = Depends(verify_token), db: Session = Depends(get_db)) -> User:
+    """Get current authenticated user"""
+    user = crud.get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 # --- FastAPI App ---
 app = FastAPI(
@@ -152,19 +166,22 @@ async def health():
     }
 
 @app.post("/api/auth/login")
-async def login(request: LoginRequest):
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
-    Login endpoint (simplified - implement proper auth in production)
-    In production: verify credentials against database, use JWT tokens
+    Login endpoint - creates user if doesn't exist
     """
-    # TODO: Verify password against database
-    user_id = str(uuid.uuid4())
-    token = create_token(user_id)
+    user = crud.get_user_by_email(db, request.email)
+    if not user:
+        # Create new user
+        name = request.email.split('@')[0].capitalize()
+        user = crud.create_user(db, request.email, name, request.password)
+    
+    token = create_token(user.id)
     
     return {
-        "id": user_id,
-        "email": request.email,
-        "name": request.email.split('@')[0].capitalize(),
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
         "token": token
     }
 
@@ -172,7 +189,8 @@ async def login(request: LoginRequest):
 @app.post("/api/profile/parse")
 async def parse_resume(
     request: ResumeParseRequest,
-    token: str = Depends(verify_token)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Parse resume text into structured JSON format"""
     if not settings.GEMINI_API_KEY:
@@ -202,7 +220,18 @@ async def parse_resume(
     {request.text}
     """
     
-    return await safe_generate_json(model, prompt)
+    parsed_data = await safe_generate_json(model, prompt)
+    
+    # Save resume to database
+    resume_name = f"Resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    resume = crud.create_resume(db, current_user.id, resume_name, parsed_data, request.text)
+    
+    return {
+        "id": resume.id,
+        "name": resume.name,
+        "data": parsed_data,
+        "created_at": resume.created_at
+    }
 
 @app.post("/api/jobs/ingest")
 async def ingest_job(
@@ -406,6 +435,60 @@ async def http_exception_handler(request, exc):
         "error": exc.detail,
         "status_code": exc.status_code
     }
+
+# --- New Database Management Endpoints ---
+@app.get("/api/profile/resumes")
+async def get_resumes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's resumes"""
+    resumes = crud.get_user_resumes(db, current_user.id)
+    return [
+        {
+            "id": resume.id,
+            "name": resume.name,
+            "is_active": resume.is_active,
+            "created_at": resume.created_at
+        }
+        for resume in resumes
+    ]
+
+@app.get("/api/jobs")
+async def get_job_applications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's job applications"""
+    jobs = crud.get_user_job_applications(db, current_user.id)
+    return [
+        {
+            "id": job.id,
+            "title": job.title,
+            "company": job.company,
+            "url": job.url,
+            "created_at": job.created_at
+        }
+        for job in jobs
+    ]
+
+@app.get("/api/interviews/history")
+async def get_interview_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's interview history"""
+    sessions = crud.get_user_interview_sessions(db, current_user.id)
+    return [
+        {
+            "id": session.id,
+            "mode": session.mode,
+            "completed": session.completed,
+            "job_title": session.job_application.title if session.job_application else None,
+            "created_at": session.created_at
+        }
+        for session in sessions
+    ]
 
 if __name__ == "__main__":
     import uvicorn
