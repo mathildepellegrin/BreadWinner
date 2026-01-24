@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # 1. Database Service
+  db:
+    image: postgres:15-alpine
+    container_name: interview_db
+    restart: always
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=hackathon_secret
+      - POSTGRES_DB=mock_interview
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d mock_interview"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Backend Service (FastAPI)
+  backend:
+    build: ./backend
+    container_name: interview_backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    environment:
+      - DATABASE_URL=postgresql://admin:hackathon_secret@db:5432/mock_interview
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env
+
+  # 3. Frontend Service (React/Vite)
+  frontend:
+    build: ./frontend
+    container_name: interview_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    stdin_open: true
+
+volumes:
+  postgres_data:
