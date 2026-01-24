@@ -236,9 +236,10 @@ async def parse_resume(
 @app.post("/api/jobs/ingest")
 async def ingest_job(
     request: JobIngestRequest,
-    token: str = Depends(verify_token)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Ingest job description from URL or text"""
+    """Ingest job description and save to database"""
     if not settings.GEMINI_API_KEY:
         raise HTTPException(status_code=503, detail="AI service not configured")
     
@@ -250,8 +251,6 @@ async def ingest_job(
         Return JSON with: title, company, description, requirements (array), benefits (array).
         
         URL: {request.url}
-        
-        If you cannot access the URL, return a structured response indicating this.
         """
     else:
         prompt = f"""
@@ -264,25 +263,44 @@ async def ingest_job(
     
     try:
         job_data = await safe_generate_json(model, prompt)
+        
+        # Save to database
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title=job_data.get("title", "Position"),
+            company=job_data.get("company", "Company"),
+            description=job_data.get("description", request.description or ""),
+            requirements=job_data.get("requirements", []),
+            benefits=job_data.get("benefits", []),
+            url=request.url
+        )
+        
         return {
-            "title": job_data.get("title", "Position"),
-            "company": job_data.get("company", "Company"),
-            "description": job_data.get("description", request.description or ""),
-            "requirements": job_data.get("requirements", []),
-            "benefits": job_data.get("benefits", []),
-            "url": request.url
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "url": job_app.url
         }
     except Exception as e:
         logger.error(f"Job ingestion failed: {e}")
-        # Fallback response
+        # Fallback manual creation
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title="New Position",
+            company="Company",
+            description=request.description or "",
+            url=request.url
+        )
         return {
-            "title": "Position",
-            "company": "Company",
-            "description": request.description or "",
-            "requirements": [],
-            "benefits": [],
-            "url": request.url,
-            "error": "Partial processing - manual review recommended"
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "url": job_app.url,
+            "warning": "Partial processing"
         }
 
 @app.post("/api/resume/tailor")
@@ -317,7 +335,70 @@ async def tailor_resume(
     {json.dumps(request.jd, indent=2)}
     """
     
-    return await safe_generate_json(model, prompt)
+    tailored_response = await safe_generate_json(model, prompt)
+    
+    # If possible, find the job application and update it with tailored content
+    # For now, we return it; frontend can handle associating it
+    return tailored_response
+
+@app.patch("/api/jobs/{job_id}/status")
+async def update_job_status(
+    job_id: int,
+    request: JobStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the status of a job application"""
+    job = db.query(JobApplication).filter(JobApplication.id == job_id, JobApplication.user_id == current_user.id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.status = request.status
+    db.commit()
+    db.refresh(job)
+    return {"status": job.status}
+
+@app.get("/api/jobs/{job_id}/analysis")
+async def get_job_analysis(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get gap analysis and match score for a job"""
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if not job.gaps or not job.match_score:
+        # Generate analysis if not present
+        resume = crud.get_active_resume(db, current_user.id)
+        if not resume:
+            raise HTTPException(status_code=400, detail="Active resume required for analysis")
+            
+        model = get_model()
+        prompt = f"""
+        Perform a gap analysis between this resume and job description.
+        Resume: {json.dumps(resume.content)}
+        Job: {job.description}
+        
+        Return JSON:
+        {{
+            "matchScore": 0-100,
+            "gaps": ["missing skill 1", "missing skill 2"],
+            "strengths": ["matched skill 1"]
+        }}
+        """
+        analysis = await safe_generate_json(model, prompt)
+        job.match_score = analysis.get("matchScore")
+        job.gaps = analysis.get("gaps")
+        db.commit()
+        db.refresh(job)
+        return analysis
+        
+    return {
+        "matchScore": job.match_score,
+        "gaps": job.gaps
+    }
 
 @app.post("/api/interviews/question")
 async def get_question(
@@ -392,38 +473,37 @@ async def get_report(
 @app.post("/api/prep/materials")
 async def get_prep(
     request: PrepMaterialsRequest,
-    token: str = Depends(verify_token)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Generate interview preparation materials"""
+    """Generate interview preparation materials (Study Lab)"""
     if not settings.GEMINI_API_KEY:
         raise HTTPException(status_code=503, detail="AI service not configured")
     
+    job = crud.get_job_application(db, request.job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    resume = crud.get_active_resume(db, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=400, detail="Active resume required")
+
     model = get_model()
     prompt = f"""
-    Generate comprehensive interview prep materials.
+    Generate Study Lab materials for: {job.title} at {job.company}.
     
-    Candidate Profile:
-    {json.dumps(request.profile, indent=2)[:2000]}
-    
-    Target Role:
-    {json.dumps(request.jd, indent=2)}
+    Job Description: {job.description}
+    Candidate Resume: {json.dumps(resume.content)}
     
     Return JSON with:
     {{
-        "coverLetter": "tailored cover letter",
-        "technicalQuestions": [
-            {{"question": "Q1", "hint": "approach hint", "keyPoints": ["point1", "point2"]}}
+        "leetcodeRoadmap": [
+            {{"title": "Two Sum", "difficulty": "Easy", "link": "https://leetcode.com/problems/two-sum/", "relevance": "Top IBM Question"}}
         ],
-        "behavioralQuestions": [
-            {{"question": "Q1", "framework": "STAR", "exampleAnswer": "sample structure"}}
-        ],
-        "companyResearch": {{
-            "keyFacts": ["fact1", "fact2"],
-            "questionsToAsk": ["Q1", "Q2"]
-        }}
+        "cheatSheets": [
+            {{"topic": "Spring Boot", "tips": ["Tip 1", "Tip 2"]}}
+        ]
     }}
-    
-    Provide 5 questions for each category.
     """
     
     return await safe_generate_json(model, prompt)
@@ -437,6 +517,24 @@ async def http_exception_handler(request, exc):
     }
 
 # --- New Database Management Endpoints ---
+@app.get("/api/dashboard/stats")
+async def dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get dashboard overview statistics"""
+    jobs_count = db.query(JobApplication).filter(JobApplication.user_id == current_user.id).count()
+    interviews_count = db.query(InterviewSession).filter(InterviewSession.user_id == current_user.id).count()
+    # Assuming success rate is based on "Offer" status
+    offers_count = db.query(JobApplication).filter(JobApplication.user_id == current_user.id, JobApplication.status == "Offer").count()
+    success_rate = (offers_count / jobs_count * 100) if jobs_count > 0 else 0
+    
+    return {
+        "jobsTracked": jobs_count,
+        "interviewsPrepped": interviews_count,
+        "successRate": round(success_rate, 1)
+    }
+
 @app.get("/api/profile/resumes")
 async def get_resumes(
     current_user: User = Depends(get_current_user),
@@ -466,6 +564,8 @@ async def get_job_applications(
             "id": job.id,
             "title": job.title,
             "company": job.company,
+            "status": job.status,
+            "matchScore": job.match_score,
             "url": job.url,
             "created_at": job.created_at
         }
