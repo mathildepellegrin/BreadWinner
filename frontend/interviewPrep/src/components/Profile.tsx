@@ -76,43 +76,61 @@ export function Profile() {
     if (!file) return;
 
     setUploadStatus('uploading');
+    const formData = new FormData();
+    formData.append('file', file);
     
-    // Simulate CV parsing - in production, this would call an AI service
-    setTimeout(() => {
-      // Mock auto-filled data from CV
-      setFullName('John Doe');
-      setEmail('john.doe@example.com');
-      setPhone('+1 (555) 123-4567');
-      setLocation('San Francisco, CA');
-      setLinkedIn('linkedin.com/in/johndoe');
-      setPortfolio('johndoe.dev');
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:8000/api/profile/upload-cv', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to upload CV');
+      }
+
+      const data = await res.json();
       
-      setSummary('Experienced software engineer with 5+ years building scalable web applications. Expertise in React, Node.js, and cloud infrastructure. Passionate about creating user-centric solutions and mentoring junior developers.');
+      // Populate form with AI-parsed data
+      if (data.name) setFullName(data.name);
+      if (data.email) setEmail(data.email);
+      if (data.phone) setPhone(data.phone);
+      if (data.location) setLocation(data.location);
+      if (data.linkedin) setLinkedIn(data.linkedin);
+      if (data.portfolio) setPortfolio(data.portfolio);
+      if (data.summary) setSummary(data.summary);
       
-      setWorkExperience(`Senior Software Engineer • TechCorp Inc. • 2021 - Present
-• Led development of microservices architecture serving 10M+ users
-• Improved application performance by 40% through optimization
-• Mentored team of 5 junior developers
+      // Helper to format arrays into text blocks
+      const formatList = (val: any) => {
+        if (!val) return '';
+        if (Array.isArray(val)) {
+          return val.map(i => typeof i === 'object' ? Object.values(i).join(' • ') : i).join('\n\n');
+        }
+        return val;
+      };
 
-Software Engineer • StartupXYZ • 2019 - 2021
-• Built real-time collaboration features using WebSockets
-• Implemented CI/CD pipelines reducing deployment time by 60%
-• Contributed to open-source projects`);
-
-      setEducation(`Bachelor of Science in Computer Science
-University of California, Berkeley • 2015 - 2019
-GPA: 3.8/4.0`);
-
-      setSkills('JavaScript, TypeScript, React, Node.js, Python, AWS, Docker, Kubernetes, PostgreSQL, MongoDB, Git, CI/CD, Agile, System Design');
-
-      setCertifications(`AWS Certified Solutions Architect • 2022
-Certified Kubernetes Administrator • 2021`);
+      if (data.experience) setWorkExperience(formatList(data.experience));
+      if (data.education) setEducation(formatList(data.education));
+      if (data.skills) setSkills(formatList(data.skills));
+      if (data.certifications) setCertifications(formatList(data.certifications));
 
       setUploadStatus('success');
-      
-      // Reset success status after 3 seconds
       setTimeout(() => setUploadStatus('idle'), 3000);
-    }, 2000);
+      
+      // Enable editing so user can review/fix the imported data
+      setIsEditing(true);
+      alert("CV parsed successfully! Please review the details below and click 'Save Profile'.");
+
+    } catch (error) {
+      console.error("CV Upload Error:", error);
+      setUploadStatus('idle');
+      alert(`Error: ${error instanceof Error ? error.message : "Failed to parse CV"}`);
+    }
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -196,7 +214,7 @@ Certified Kubernetes Administrator • 2021`);
         </div>
 
         {/* CV Upload Section */}
-        <div className={`bg-white border border-[#d0d7de] rounded-lg p-6 mb-6 ${!isEditing ? 'opacity-60 pointer-events-none' : ''}`}>
+        <div className="bg-white border border-[#d0d7de] rounded-lg p-6 mb-6">
           <div className="flex items-center gap-2 mb-4">
             <Upload className="size-5 text-[#0969da]" />
             <h2 className="text-xl font-semibold text-[#1f2328]">Upload CV</h2>
@@ -210,7 +228,6 @@ Certified Kubernetes Administrator • 2021`);
               type="file"
               id="cv-upload"
               accept=".pdf,.doc,.docx"
-              disabled={!isEditing}
               onChange={handleFileUpload}
               className="hidden"
             />

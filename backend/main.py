@@ -4,7 +4,7 @@ import json
 import requests
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Body, Depends, Security, status
+from fastapi import FastAPI, HTTPException, Body, Depends, Security, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -17,6 +17,9 @@ from models import Base, User, Resume, JobApplication, InterviewSession, Company
 import crud
 import hashlib
 from firecrawl import FirecrawlApp
+import io
+import fitz # PyMuPDF
+from docx import Document
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -229,6 +232,25 @@ app.add_middleware(
 )
 
 # --- Helper Functions ---
+def extract_text_from_file(file_content: bytes, filename: str) -> str:
+    """Extract text from PDF, DOCX, or TXT files"""
+    text = ""
+    try:
+        if filename.lower().endswith(".pdf"):
+            with fitz.open(stream=file_content, filetype="pdf") as doc:
+                for page in doc:
+                    text += page.get_text()
+        elif filename.lower().endswith(".docx"):
+            doc = Document(io.BytesIO(file_content))
+            text = "\n".join([para.text for para in doc.paragraphs])
+        elif filename.lower().endswith(".txt"):
+            text = file_content.decode("utf-8")
+    except Exception as e:
+        logger.error(f"Error extracting text from {filename}: {e}")
+        raise e
+    return text
+
+# --- Helper Functions ---
 async def safe_generate_json(prompt: str, max_retries: int = 2) -> Dict[str, Any]:
     """Safely generate JSON via OpenRouter with retries"""
     for attempt in range(max_retries):
@@ -373,6 +395,53 @@ async def update_profile(
     })
     db.commit()
     return {"message": "Profile updated successfully"}
+
+@app.post("/api/profile/upload-cv")
+async def upload_cv(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload CV (PDF/DOCX), parse with AI, and save to database"""
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
+        raise HTTPException(status_code=503, detail="AI service not configured")
+
+    # 1. Read and Extract Text
+    try:
+        content = await file.read()
+        cv_text = extract_text_from_file(content, file.filename)
+    except Exception as e:
+        logger.error(f"CV Upload processing error: {e}")
+        raise HTTPException(status_code=400, detail=f"File processing failed: {str(e)}")
+    
+    if not cv_text.strip():
+        raise HTTPException(status_code=400, detail="Could not extract text from file. Please try a different format.")
+
+    # 2. Parse with AI
+    prompt = f"""
+    Convert this raw CV text into a structured JSON profile including: 
+    name, email, phone, location, linkedin, portfolio, summary, 
+    education (array of strings or objects), experience (array of strings or objects), 
+    skills (array of strings), and certifications (array of strings).
+    
+    Ensure the keys match exactly these names.
+    
+    Raw CV:
+    {cv_text[:settings.MAX_TEXT_LENGTH]}
+    """
+    
+    parsed_data = await safe_generate_json(prompt)
+    
+    # 3. Manage Active Resume State
+    # Deactivate old resumes for this user
+    db.execute(text("UPDATE resumes SET is_active = false WHERE user_id = :uid"), {"uid": current_user.id})
+    db.commit()
+    
+    # 4. Save to Database
+    crud.create_resume(db, current_user.id, file.filename, parsed_data, cv_text)
+    
+    # 5. Return Data to Frontend (to populate form)
+    return parsed_data
 
 # --- Company Questions Cache ---
 @app.get("/api/prep/company/{company_name}")
@@ -795,11 +864,17 @@ async def get_question(
     if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
     
+    # Fetch active resume to provide better context
+    resume = crud.get_active_resume(db, current_user.id)
+    candidate_profile = request.profile
+    if resume:
+        candidate_profile = resume.content
+
     prompt = f"""
     You are an expert {request.mode} interviewer for: {request.jd.get('title', 'Position')} at {request.jd.get('company', 'Company')}.
     
     Candidate Profile Summary:
-    {json.dumps(request.profile, indent=2)[:1000]}
+    {json.dumps(candidate_profile, indent=2)[:1500]}
     
     Interview Mode: {request.mode}
     
