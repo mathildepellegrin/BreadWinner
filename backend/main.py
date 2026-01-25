@@ -10,9 +10,15 @@ from pydantic import BaseModel, EmailStr, Field, validator
 import logging
 from sqlalchemy.orm import Session
 from openai import OpenAI
+import requests
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
 import crud
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,11 +59,18 @@ class ResumeParseRequest(BaseModel):
 class JobIngestRequest(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = Field(None, max_length=settings.MAX_TEXT_LENGTH)
+    title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
+    salary_range: Optional[str] = None
+    requirements: Optional[str] = None  # Will be split by newlines
+    responsibilities: Optional[str] = None  # Will be split by newlines
+    benefits: Optional[str] = None  # Will be split by newlines
+    interview_type: Optional[str] = Field(None, pattern="^(technical|behavioral|both)$")
     
     @validator('url', 'description')
     def validate_input(cls, v, values):
-        if not values.get('url') and not v:
-            raise ValueError('Either url or description must be provided')
+        # Allow manual form submission without url or description
         return v
 
 class TailorResumeRequest(BaseModel):
@@ -75,7 +88,7 @@ class InterviewReportRequest(BaseModel):
     jd: Dict[str, Any]
 
 class JobStatusUpdate(BaseModel):
-    status: str = Field(..., pattern="^(Applied|Interviewing|Rejected|Offer)$")
+    status: str = Field(..., pattern="^(Upcoming|Completed)$")
 
 class PrepMaterialsRequest(BaseModel):
     job_id: int
@@ -140,6 +153,62 @@ async def safe_generate_json(prompt: str, max_retries: int = 2) -> Dict[str, Any
             logger.error(f"AI generation failed (attempt {attempt + 1}): {e}")
             if attempt == max_retries - 1:
                 raise HTTPException(status_code=500, detail="AI service error")
+
+def scrape_job_posting(url: str) -> str:
+    """Scrape job posting content from URL using requests and BeautifulSoup"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
+        logger.info(f"Attempting to scrape URL: {url}")
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        response.raise_for_status()
+        
+        logger.info(f"Response status: {response.status_code}, Content length: {len(response.content)}")
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header", "iframe", "noscript"]):
+            script.decompose()
+        
+        # Get text content
+        text = soup.get_text()
+        
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = ' '.join(chunk for chunk in chunks if chunk)
+        
+        # Check if we got meaningful content
+        if len(text) < 100:
+            logger.warning(f"Scraped content is too short ({len(text)} chars), might be blocked or invalid page")
+            raise HTTPException(
+                status_code=400, 
+                detail="Could not extract meaningful content from the URL. Please ensure it's a direct job posting link."
+            )
+        
+        # Limit text length
+        if len(text) > settings.MAX_TEXT_LENGTH:
+            text = text[:settings.MAX_TEXT_LENGTH]
+        
+        logger.info(f"Successfully scraped {len(text)} characters from {url}")
+        return text
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout while scraping {url}")
+        raise HTTPException(status_code=408, detail="Request timeout. The website took too long to respond.")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed for {url}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to scrape URL {url}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to scrape job posting: {str(e)}")
 
 # --- Public Routes ---
 @app.get("/api/health")
@@ -253,6 +322,108 @@ async def parse_resume(
         "created_at": resume.created_at
     }
 
+@app.post("/api/jobs/test-scrape")
+async def test_scrape(request: Dict[str, str] = Body(...)):
+    """Test endpoint to debug web scraping - NO AUTH REQUIRED"""
+    url = request.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+    
+    logger.info(f"TEST SCRAPE request for URL: {url}")
+    
+    try:
+        # Test just the scraping part
+        scraped_content = scrape_job_posting(url)
+        return {
+            "success": True,
+            "url": url,
+            "contentLength": len(scraped_content),
+            "preview": scraped_content[:500] + "..." if len(scraped_content) > 500 else scraped_content
+        }
+    except Exception as e:
+        logger.error(f"Test scrape failed: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "errorType": type(e).__name__
+        }
+
+@app.post("/api/jobs/autofill")
+async def autofill_job(
+    request: Dict[str, str] = Body(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Auto-fill job details from URL using web scraping and AI"""
+    url = request.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+    
+    logger.info(f"Auto-fill request for URL: {url}")
+    
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    try:
+        # Scrape the job posting
+        logger.info("Starting web scraping...")
+        scraped_content = scrape_job_posting(url)
+        logger.info(f"Scraping complete. Content length: {len(scraped_content)}")
+        
+        # Use AI to parse and structure the data
+        logger.info("Sending to AI for parsing...")
+        prompt = f"""
+        You are a job posting parser. Extract and structure the following information from this job posting.
+        Return a valid JSON object with these exact fields:
+        - title: The job title/position name
+        - company: The company name
+        - location: The job location (e.g., "Remote", "New York, NY", "Hybrid - Seattle")
+        - salaryRange: The salary range if mentioned (e.g., "$120k - $180k"), empty string if not found
+        - description: A brief 2-3 sentence description of the role
+        - requirements: An array of key requirements/qualifications (5-10 items)
+        - responsibilities: An array of main job responsibilities (5-10 items)
+        - benefits: An array of benefits/perks mentioned (3-8 items), empty array if none found
+        - interviewType: Based on the job description, determine if this is likely "technical", "behavioral", or "both"
+        
+        Job Posting Content:
+        {scraped_content}
+        
+        Return ONLY valid JSON, no additional text.
+        """
+        
+        job_data = await safe_generate_json(prompt)
+        
+        # Handle case where AI returns a list instead of dict
+        if isinstance(job_data, list):
+            logger.warning(f"AI returned a list with {len(job_data)} items, taking first item")
+            if len(job_data) > 0:
+                job_data = job_data[0]
+            else:
+                raise ValueError("AI returned an empty list")
+        
+        logger.info(f"AI returned data type: {type(job_data)}")
+        logger.info(f"AI parsing complete. Extracted: {job_data.get('title', 'N/A')} at {job_data.get('company', 'N/A')}")
+        
+        # Format the data for the frontend
+        result = {
+            "title": job_data.get("title", ""),
+            "company": job_data.get("company", ""),
+            "location": job_data.get("location", ""),
+            "salaryRange": job_data.get("salaryRange", ""),
+            "description": job_data.get("description", ""),
+            "requirements": "\n".join(job_data.get("requirements", [])),
+            "responsibilities": "\n".join(job_data.get("responsibilities", [])),
+            "benefits": "\n".join(job_data.get("benefits", [])),
+            "interviewType": job_data.get("interviewType", "technical")
+        }
+        
+        logger.info("Auto-fill successful")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Auto-fill failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to auto-fill: {str(e)}")
+
 @app.post("/api/jobs/ingest")
 async def ingest_job(
     request: JobIngestRequest,
@@ -260,6 +431,41 @@ async def ingest_job(
     db: Session = Depends(get_db)
 ):
     """Ingest job description and save to database"""
+    
+    # If manual form data is provided (has title and company), use it directly
+    if request.title and request.company:
+        # Parse text fields that have newline-separated items
+        requirements_list = [r.strip() for r in request.requirements.split('\n') if r.strip()] if request.requirements else []
+        responsibilities_list = [r.strip() for r in request.responsibilities.split('\n') if r.strip()] if request.responsibilities else []
+        benefits_list = [b.strip() for b in request.benefits.split('\n') if b.strip()] if request.benefits else []
+        
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title=request.title,
+            company=request.company,
+            description=request.description or "",
+            requirements=requirements_list,
+            responsibilities=responsibilities_list,
+            benefits=benefits_list,
+            url=request.url,
+            location=request.location,
+            salary_range=request.salary_range,
+            interview_type=request.interview_type or "technical"
+        )
+        
+        return {
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "interviewType": job_app.interview_type,
+            "location": job_app.location,
+            "salaryRange": job_app.salary_range,
+            "url": job_app.url
+        }
+    
+    # Otherwise, use AI to extract from URL or description
     if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
     
@@ -344,12 +550,12 @@ async def get_job_analysis(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get gap analysis and match score for a job"""
+    """Get gap analysis for a job"""
     job = crud.get_job_application(db, job_id, current_user.id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if not job.gaps or not job.match_score:
+    if not job.gaps:
         # Generate analysis if not present
         resume = crud.get_active_resume(db, current_user.id)
         if not resume:
@@ -362,20 +568,17 @@ async def get_job_analysis(
         
         Return JSON:
         {{
-            "matchScore": 0-100,
             "gaps": ["missing skill 1", "missing skill 2"],
             "strengths": ["matched skill 1"]
         }}
         """
         analysis = await safe_generate_json(prompt)
-        job.match_score = analysis.get("matchScore")
         job.gaps = analysis.get("gaps")
         db.commit()
         db.refresh(job)
         return analysis
         
     return {
-        "matchScore": job.match_score,
         "gaps": job.gaps
     }
 
@@ -546,12 +749,44 @@ async def get_job_applications(
             "title": job.title,
             "company": job.company,
             "status": job.status,
-            "matchScore": job.match_score,
+            "interviewType": job.interview_type,
             "url": job.url,
+            "location": job.location,
+            "salaryRange": job.salary_range,
             "created_at": job.created_at
         }
         for job in jobs
     ]
+
+@app.get("/api/jobs/{job_id}")
+async def get_job_application_by_id(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a single job application by ID"""
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return {
+        "id": job.id,
+        "title": job.title,
+        "company": job.company,
+        "status": job.status,
+        "interviewType": job.interview_type,
+        "url": job.url,
+        "location": job.location,
+        "salaryRange": job.salary_range,
+        "description": job.description,
+        "requirements": job.requirements,
+        "responsibilities": job.responsibilities,
+        "benefits": job.benefits,
+        "technicalTopics": job.technical_topics,
+        "behavioralTopics": job.behavioral_topics,
+        "leetcodeTopics": job.leetcode_topics,
+        "created_at": job.created_at
+    }
 
 @app.get("/api/interviews/history")
 async def get_interview_history(

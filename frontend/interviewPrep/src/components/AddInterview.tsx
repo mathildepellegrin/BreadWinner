@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router';
 import { Brain, ArrowLeft, Link2, Sparkles } from 'lucide-react';
-import { FormEvent, useState } from 'react';
+import { type FormEvent, useState } from 'react';
+import { createJobApplication, autoFillJobFromUrl } from '../../apis/jobsService';
 
 export function AddInterview() {
   const navigate = useNavigate();
@@ -11,40 +12,75 @@ export function AddInterview() {
   const [company, setCompany] = useState('');
   const [position, setPosition] = useState('');
   const [interviewDate, setInterviewDate] = useState('');
+  const [interviewType, setInterviewType] = useState<'technical' | 'behavioral' | 'both'>('technical');
   const [location, setLocation] = useState('');
   const [salaryRange, setSalaryRange] = useState('');
   const [description, setDescription] = useState('');
   const [responsibilities, setResponsibilities] = useState('');
   const [requirements, setRequirements] = useState('');
   const [companyValues, setCompanyValues] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAutoFill = async () => {
     if (!jobUrl.trim()) return;
     
     setIsAutoFilling(true);
     
-    // Simulate API call to fetch job posting details
-    setTimeout(() => {
-      // Mock auto-filled data
-      setCompany('TechCorp Inc.');
-      setPosition('Senior Full Stack Engineer');
-      setLocation('Remote');
-      setSalaryRange('$140k - $200k');
-      setDescription('Join our innovative team to build next-generation cloud applications that serve millions of users worldwide. You will work on cutting-edge technologies and collaborate with talented engineers.');
-      setResponsibilities('Design and develop scalable web applications\nLead technical design discussions\nMentor junior developers\nCollaborate with product and design teams');
-      setRequirements('5+ years of full-stack development experience\nProficiency in React, Node.js, and TypeScript\nExperience with cloud platforms (AWS/GCP)\nStrong problem-solving skills');
-      setCompanyValues('Innovation and creativity\nCustomer-centric approach\nCollaboration and teamwork\nContinuous learning and growth\nWork-life balance');
+    try {
+      const data = await autoFillJobFromUrl(jobUrl);
       
+      // Fill form with auto-filled data
+      setCompany(data.company);
+      setPosition(data.title);
+      setLocation(data.location);
+      setSalaryRange(data.salaryRange);
+      setDescription(data.description);
+      setResponsibilities(data.responsibilities);
+      setRequirements(data.requirements);
+      setCompanyValues(data.benefits);
+      setInterviewType(data.interviewType);
+    } catch (error: any) {
+      console.error('Auto-fill failed:', error);
+      const errorMessage = error?.message || 'Failed to auto-fill from URL';
+      
+      if (errorMessage.includes('meaningful content')) {
+        alert('Could not extract job posting from this URL. Please ensure you are using a direct link to a specific job posting, not a search results page.');
+      } else if (errorMessage.includes('timeout')) {
+        alert('The website took too long to respond. Please try again.');
+      } else {
+        alert('Failed to auto-fill from URL. The website may be blocking automated access or the URL format is not supported. Please try manually entering the information.');
+      }
+    } finally {
       setIsAutoFilling(false);
-    }, 1500);
+    }
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     
-    // In a real app, this would save to database
-    alert('Interview added successfully! (This would save to database in production)');
-    navigate('/dashboard');
+    setIsSubmitting(true);
+    
+    try {
+      await createJobApplication({
+        title: position,
+        company: company,
+        description: description,
+        location: location,
+        salaryRange: salaryRange,
+        requirements: requirements,
+        responsibilities: responsibilities,
+        benefits: companyValues,
+        interviewType: interviewType,
+        url: jobUrl || undefined
+      });
+      
+      navigate('/dashboard');
+    } catch (error) {
+      console.error('Failed to create job:', error);
+      alert('Failed to add interview. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -170,6 +206,23 @@ export function AddInterview() {
               </div>
 
               <div>
+                <label htmlFor="interviewType" className="block text-sm font-medium text-[#1f2328] mb-2">
+                  Interview Type *
+                </label>
+                <select
+                  id="interviewType"
+                  value={interviewType}
+                  onChange={(e) => setInterviewType(e.target.value as 'technical' | 'behavioral' | 'both')}
+                  required
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                >
+                  <option value="technical">Technical</option>
+                  <option value="behavioral">Behavioral</option>
+                  <option value="both">Both</option>
+                </select>
+              </div>
+
+              <div>
                 <label htmlFor="location" className="block text-sm font-medium text-[#1f2328] mb-2">
                   Location
                 </label>
@@ -266,9 +319,17 @@ export function AddInterview() {
           <div className="flex gap-4">
             <button
               type="submit"
-              className="flex-1 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-semibold transition-colors"
+              disabled={isSubmitting}
+              className="flex-1 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              Add Interview
+              {isSubmitting ? (
+                <>
+                  <div className="size-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Add Interview'
+              )}
             </button>
             <Link
               to="/dashboard"

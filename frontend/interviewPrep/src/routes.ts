@@ -34,7 +34,7 @@ export const router = createBrowserRouter([
     Component: AddInterview,
   },
   {
-    path: "/interview/:id",
+    path: "/job/:id",
     Component: InterviewDetail,
   },
   {

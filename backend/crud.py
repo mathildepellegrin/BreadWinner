@@ -45,7 +45,11 @@ def get_active_resume(db: Session, user_id: int) -> Optional[Resume]:
 # Job Application CRUD
 def create_job_application(db: Session, user_id: int, title: str, company: str, 
                           description: str = None, requirements: List[str] = None, 
-                          benefits: List[str] = None, url: str = None) -> JobApplication:
+                          benefits: List[str] = None, url: str = None,
+                          location: str = None, salary_range: str = None,
+                          responsibilities: List[str] = None, interview_type: str = None,
+                          technical_topics: List[str] = None, behavioral_topics: List[str] = None,
+                          leetcode_topics: List[str] = None) -> JobApplication:
     job_app = JobApplication(
         user_id=user_id,
         title=title,
@@ -53,7 +57,14 @@ def create_job_application(db: Session, user_id: int, title: str, company: str,
         description=description,
         requirements=requirements or [],
         benefits=benefits or [],
-        url=url
+        url=url,
+        location=location,
+        salary_range=salary_range,
+        responsibilities=responsibilities or [],
+        interview_type=interview_type or "technical",
+        technical_topics=technical_topics or [],
+        behavioral_topics=behavioral_topics or [],
+        leetcode_topics=leetcode_topics or []
     )
     db.add(job_app)
     db.commit()

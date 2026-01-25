@@ -42,8 +42,14 @@ class JobApplication(Base):
     requirements = Column(JSON, nullable=True)
     benefits = Column(JSON, nullable=True)
     url = Column(String, nullable=True)
-    status = Column(String, default="Applied")  # Applied, Interviewing, Rejected, Offer
-    match_score = Column(Integer, nullable=True)
+    status = Column(String, default="Upcoming")  # Upcoming, Completed
+    interview_type = Column(String, nullable=True)  # technical, behavioral, both
+    location = Column(String, nullable=True)
+    salary_range = Column(String, nullable=True)
+    responsibilities = Column(JSON, nullable=True)
+    technical_topics = Column(JSON, nullable=True)
+    behavioral_topics = Column(JSON, nullable=True)
+    leetcode_topics = Column(JSON, nullable=True)
     gaps = Column(JSON, nullable=True)
     tailored_bullet_points = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

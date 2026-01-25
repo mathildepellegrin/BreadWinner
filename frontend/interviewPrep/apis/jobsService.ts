@@ -6,10 +6,19 @@ export interface Job {
   id: number;
   title: string;
   company: string;
-  status: "Applied" | "Interviewing" | "Rejected" | "Offer";
-  matchScore?: number;
+  status: "Upcoming" | "Completed";
+  interviewType?: "technical" | "behavioral" | "both";
   url?: string;
   created_at: string;
+  location?: string;
+  salaryRange?: string;
+  description?: string;
+  requirements?: string[];
+  responsibilities?: string[];
+  benefits?: string[];
+  technicalTopics?: string[];
+  behavioralTopics?: string[];
+  leetcodeTopics?: string[];
 }
 
 /**
@@ -42,6 +51,132 @@ export async function getJobApplications(): Promise<Job[]> {
     return data;
   } catch (error) {
     console.error("❌ Error fetching jobs:", error);
+    throw error;
+  }
+}
+
+export interface CreateJobData {
+  title: string;
+  company: string;
+  description?: string;
+  location?: string;
+  salaryRange?: string;
+  requirements?: string;
+  responsibilities?: string;
+  benefits?: string;
+  interviewType?: "technical" | "behavioral" | "both";
+  url?: string;
+}
+
+/**
+ * Create a new job application
+ */
+export async function createJobApplication(jobData: CreateJobData): Promise<Job> {
+  try {
+    console.log("📝 Creating job application...", jobData);
+
+    const response = await fetch(`${API_BASE_URL}/api/jobs/ingest`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeader(),
+      },
+      body: JSON.stringify(jobData),
+    });
+
+    console.log("📡 Create job API response status:", response.status);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error("❌ Create job API error:", error);
+      throw new Error(error.detail || "Failed to create job");
+    }
+
+    const data = await response.json();
+    console.log("✅ Job created successfully", data);
+
+    return data;
+  } catch (error) {
+    console.error("❌ Error creating job:", error);
+    throw error;
+  }
+}
+
+export interface AutoFillData {
+  title: string;
+  company: string;
+  location: string;
+  salaryRange: string;
+  description: string;
+  requirements: string;
+  responsibilities: string;
+  benefits: string;
+  interviewType: "technical" | "behavioral" | "both";
+}
+
+/**
+ * Auto-fill job details from URL
+ */
+export async function autoFillJobFromUrl(url: string): Promise<AutoFillData> {
+  try {
+    console.log("🤖 Auto-filling job from URL...", url);
+
+    const response = await fetch(`${API_BASE_URL}/api/jobs/autofill`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeader(),
+      },
+      body: JSON.stringify({ url }),
+    });
+
+    console.log("📡 Auto-fill API response status:", response.status);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error("❌ Auto-fill API error:", error);
+      throw new Error(error.detail || "Failed to auto-fill from URL");
+    }
+
+    const data = await response.json();
+    console.log("✅ Job auto-filled successfully", data);
+
+    return data;
+  } catch (error) {
+    console.error("❌ Error auto-filling job:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get a single job application by ID
+ */
+export async function getJobApplication(id: number): Promise<Job> {
+  try {
+    console.log(`📋 Fetching job application ${id}...`);
+
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${id}`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeader(),
+      },
+    });
+
+    console.log("📡 Job API response status:", response.status);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error("❌ Job API error:", error);
+      throw new Error(error.detail || "Failed to fetch job");
+    }
+
+    const data = await response.json();
+    console.log("✅ Job fetched successfully", data);
+
+    return data;
+  } catch (error) {
+    console.error("❌ Error fetching job:", error);
     throw error;
   }
 }

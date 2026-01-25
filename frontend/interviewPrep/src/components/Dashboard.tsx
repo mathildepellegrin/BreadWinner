@@ -38,22 +38,18 @@ export function Dashboard() {
 
   // Categorize jobs by status
   const upcomingInterviews = jobs.filter(
-    (job) => job.status === "Applied" || job.status === "Interviewing",
+    (job) => job.status === "Upcoming",
   );
   const completedInterviews = jobs.filter(
-    (job) => job.status === "Offer" || job.status === "Rejected",
+    (job) => job.status === "Completed",
   );
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case "Applied":
-        return <Circle className="size-4 text-[#9a6700] fill-[#9a6700]" />;
-      case "Interviewing":
+      case "Upcoming":
         return <Circle className="size-4 text-[#0969da] fill-[#0969da]" />;
-      case "Offer":
+      case "Completed":
         return <CheckCircle className="size-4 text-[#1a7f37]" />;
-      case "Rejected":
-        return <Circle className="size-4 text-[#d1240a] fill-[#d1240a]" />;
       default:
         return <Circle className="size-4 text-[#656d76] fill-[#656d76]" />;
     }
@@ -61,14 +57,10 @@ export function Dashboard() {
 
   const getStatusBadgeStyle = (status: string) => {
     switch (status) {
-      case "Applied":
-        return "bg-[#fff8c5] text-[#9a6700] border-[#dca811]/30";
-      case "Interviewing":
+      case "Upcoming":
         return "bg-[#ddf4ff] text-[#0969da] border-[#54aeff]/30";
-      case "Offer":
+      case "Completed":
         return "bg-[#dafbe1] text-[#1a7f37] border-[#1a7f37]/30";
-      case "Rejected":
-        return "bg-[#ffebe6] text-[#d1240a] border-[#d1240a]/30";
       default:
         return "bg-[#f6f8fa] text-[#656d76] border-[#d0d7de]";
     }
@@ -81,6 +73,11 @@ export function Dashboard() {
       day: "numeric",
       year: "numeric",
     });
+  };
+
+  const formatInterviewType = (type?: string) => {
+    if (!type) return "-";
+    return type.charAt(0).toUpperCase() + type.slice(1);
   };
 
   return (
@@ -180,7 +177,7 @@ export function Dashboard() {
                         Date Applied
                       </th>
                       <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">
-                        Match Score
+                        Interview Type
                       </th>
                       <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">
                         Status
@@ -218,13 +215,9 @@ export function Dashboard() {
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          {job.matchScore ? (
-                            <span className="text-sm text-[#0969da] font-medium">
-                              {job.matchScore}%
-                            </span>
-                          ) : (
-                            <span className="text-sm text-[#656d76]">-</span>
-                          )}
+                          <span className="text-sm text-[#1f2328] capitalize">
+                            {formatInterviewType(job.interviewType)}
+                          </span>
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
@@ -279,7 +272,7 @@ export function Dashboard() {
                         Date Applied
                       </th>
                       <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">
-                        Match Score
+                        Interview Type
                       </th>
                       <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">
                         Status
@@ -317,13 +310,9 @@ export function Dashboard() {
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          {job.matchScore ? (
-                            <span className="text-sm text-[#0969da] font-medium">
-                              {job.matchScore}%
-                            </span>
-                          ) : (
-                            <span className="text-sm text-[#656d76]">-</span>
-                          )}
+                          <span className="text-sm text-[#1f2328] capitalize">
+                            {formatInterviewType(job.interviewType)}
+                          </span>
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
