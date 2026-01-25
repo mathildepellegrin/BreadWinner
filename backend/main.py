@@ -7,12 +7,11 @@ from fastapi import FastAPI, HTTPException, Body, Depends, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, validator
-import google.generativeai as genai
-from functools import lru_cache
 import logging
 from sqlalchemy.orm import Session
+from openai import OpenAI
 from database import SessionLocal, engine, get_db
-from models import Base, User, Resume, JobApplication, InterviewSession
+from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
 import crud
 
 # Configure logging
@@ -24,19 +23,24 @@ Base.metadata.create_all(bind=engine)
 
 # --- Configuration ---
 class Settings:
-    GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
-    ALLOWED_ORIGINS: List[str] = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-    MODEL_NAME: str = "gemini-1.5-flash"
+    OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
+    GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")  # Keep for backward compatibility
+    ALLOWED_ORIGINS: List[str] = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    MODEL_NAME: str = "google/gemini-2.0-flash-001"
     MAX_TEXT_LENGTH: int = 50000
-    JWT_SECRET: str = os.environ.get("JWT_SECRET", "your-secret-key-change-in-production")
+    JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
 
 settings = Settings()
 
-# Initialize Gemini
-if not settings.GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY not found in environment variables!")
-else:
-    genai.configure(api_key=settings.GEMINI_API_KEY)
+# Initialize OpenRouter Client
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY,
+    default_headers={
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "BreadWinner AI",
+    }
+)
 
 # --- Pydantic Models ---
 class LoginRequest(BaseModel):
@@ -122,39 +126,20 @@ app.add_middleware(
 )
 
 # --- Helper Functions ---
-@lru_cache()
-def get_model(name: str = settings.MODEL_NAME):
-    """Get Gemini model with caching"""
-    try:
-        return genai.GenerativeModel(name)
-    except Exception as e:
-        logger.error(f"Failed to initialize model: {e}")
-        raise HTTPException(status_code=500, detail="AI service unavailable")
-
-async def safe_generate_json(model, prompt: str, max_retries: int = 2) -> Dict[str, Any]:
-    """Safely generate JSON with retries and validation"""
+async def safe_generate_json(prompt: str, max_retries: int = 2) -> Dict[str, Any]:
+    """Safely generate JSON via OpenRouter with retries"""
     for attempt in range(max_retries):
         try:
-            response = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
+            response = client.chat.completions.create(
+                model=settings.MODEL_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={ "type": "json_object" }
             )
-            
-            # Clean and parse response
-            text = response.text.strip()
-            if text.startswith("```json"):
-                text = text[7:]
-            if text.endswith("```"):
-                text = text[:-3]
-            
-            return json.loads(text.strip())
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON parse failed (attempt {attempt + 1}): {e}")
-            if attempt == max_retries - 1:
-                raise HTTPException(status_code=500, detail="Failed to parse AI response")
+            return json.loads(response.choices[0].message.content)
         except Exception as e:
-            logger.error(f"AI generation failed: {e}")
-            raise HTTPException(status_code=500, detail="AI service error")
+            logger.error(f"AI generation failed (attempt {attempt + 1}): {e}")
+            if attempt == max_retries - 1:
+                raise HTTPException(status_code=500, detail="AI service error")
 
 # --- Public Routes ---
 @app.get("/api/health")
@@ -164,7 +149,7 @@ async def health():
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "model": settings.MODEL_NAME,
-        "api_key_configured": bool(settings.GEMINI_API_KEY)
+        "api_key_configured": bool(settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY)
     }
 
 @app.post("/api/auth/login")
@@ -187,6 +172,40 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         "token": token
     }
 
+# --- Company Questions Cache ---
+@app.get("/api/prep/company/{company_name}")
+async def get_company_prep(company_name: str, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+    """Check cache for company questions; generate via AI if not found."""
+    company = crud.get_company_by_name(db, company_name)
+    
+    if company:
+        logger.info(f"Cache Hit for {company_name}")
+        return {"company": company.name, "questions": company.questions}
+
+    logger.info(f"Cache Miss for {company_name}. Generating new questions...")
+    prompt = f"""
+    Generate 15 interview questions for {company_name}. 
+    Categories: 5 'leetcode', 5 'technical', 5 'behavioral'.
+    For 'leetcode', include 'leetcode_slug' (e.g., 'two-sum').
+    Return JSON: {{ "questions": [ {{ "category": "leetcode", "title": "Two Sum", "text": "Given an array...", "leetcode_slug": "two-sum", "ideal_answer": "Use hashmap..." }} ] }}
+    """
+    ai_data = await safe_generate_json(prompt)
+    
+    new_company = crud.create_company(db, company_name.capitalize())
+    
+    for q in ai_data.get('questions', []):
+        crud.create_question(
+            db, new_company.id,
+            q['category'],
+            q['title'], 
+            q['text'],
+            q['ideal_answer'],
+            q.get('leetcode_slug')
+        )
+    
+    db.refresh(new_company)
+    return {"company": new_company.name, "questions": new_company.questions}
+
 # --- Protected Routes ---
 @app.post("/api/profile/parse")
 async def parse_resume(
@@ -195,10 +214,9 @@ async def parse_resume(
     db: Session = Depends(get_db)
 ):
     """Parse resume text into structured JSON format"""
-    if not settings.GEMINI_API_KEY:
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
     
-    model = get_model()
     prompt = f"""
     Parse the following resume text into a structured JSON format with these exact fields:
     {{
@@ -222,7 +240,7 @@ async def parse_resume(
     {request.text}
     """
     
-    parsed_data = await safe_generate_json(model, prompt)
+    parsed_data = await safe_generate_json(prompt)
     
     # Save resume to database
     resume_name = f"Resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -242,10 +260,8 @@ async def ingest_job(
     db: Session = Depends(get_db)
 ):
     """Ingest job description and save to database"""
-    if not settings.GEMINI_API_KEY:
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
-    
-    model = get_model()
     
     if request.url:
         prompt = f"""
@@ -264,7 +280,7 @@ async def ingest_job(
         """
     
     try:
-        job_data = await safe_generate_json(model, prompt)
+        job_data = await safe_generate_json(prompt)
         
         # Save to database
         job_app = crud.create_job_application(
@@ -339,7 +355,6 @@ async def get_job_analysis(
         if not resume:
             raise HTTPException(status_code=400, detail="Active resume required for analysis")
             
-        model = get_model()
         prompt = f"""
         Perform a gap analysis between this resume and job description.
         Resume: {json.dumps(resume.content)}
@@ -352,7 +367,7 @@ async def get_job_analysis(
             "strengths": ["matched skill 1"]
         }}
         """
-        analysis = await safe_generate_json(model, prompt)
+        analysis = await safe_generate_json(prompt)
         job.match_score = analysis.get("matchScore")
         job.gaps = analysis.get("gaps")
         db.commit()
@@ -367,13 +382,13 @@ async def get_job_analysis(
 @app.post("/api/interviews/question")
 async def get_question(
     request: InterviewQuestionRequest,
-    token: str = Depends(verify_token)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Generate interview question with feedback"""
-    if not settings.GEMINI_API_KEY:
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
     
-    model = get_model()
     prompt = f"""
     You are an expert {request.mode} interviewer for: {request.jd.get('title', 'Position')} at {request.jd.get('company', 'Company')}.
     
@@ -397,18 +412,18 @@ async def get_question(
     }}
     """
     
-    return await safe_generate_json(model, prompt)
+    return await safe_generate_json(prompt)
 
 @app.post("/api/interviews/report")
 async def get_report(
     request: InterviewReportRequest,
-    token: str = Depends(verify_token)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Generate comprehensive interview feedback report"""
-    if not settings.GEMINI_API_KEY:
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
     
-    model = get_model()
     prompt = f"""
     Generate a detailed interview performance report.
     
@@ -428,8 +443,11 @@ async def get_report(
     """
     
     try:
-        response = model.generate_content(prompt)
-        return {"report": response.text}
+        response = client.chat.completions.create(
+            model=settings.MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return {"report": response.choices[0].message.content}
     except Exception as e:
         logger.error(f"Report generation failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate report")
@@ -441,7 +459,7 @@ async def get_prep(
     db: Session = Depends(get_db)
 ):
     """Generate interview preparation materials (Study Lab)"""
-    if not settings.GEMINI_API_KEY:
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
     
     job = crud.get_job_application(db, request.job_id, current_user.id)
@@ -452,7 +470,6 @@ async def get_prep(
     if not resume:
         raise HTTPException(status_code=400, detail="Active resume required")
 
-    model = get_model()
     prompt = f"""
     Generate Study Lab materials for: {job.title} at {job.company}.
     
@@ -470,7 +487,7 @@ async def get_prep(
     }}
     """
     
-    return await safe_generate_json(model, prompt)
+    return await safe_generate_json(prompt)
 
 # --- Error Handlers ---
 @app.exception_handler(HTTPException)
