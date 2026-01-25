@@ -155,13 +155,29 @@ async def health():
 @app.post("/api/auth/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
-    Login endpoint - creates user if doesn't exist
+    Login endpoint - validates credentials
     """
     user = crud.get_user_by_email(db, request.email)
+    
     if not user:
-        # Create new user
-        name = request.email.split('@')[0].capitalize()
-        user = crud.create_user(db, request.email, name, request.password)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password"
+        )
+    
+    # Verify password
+    if not user.password_hash or not request.password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password"
+        )
+    
+    password_hash = hashlib.sha256(request.password.encode()).hexdigest()
+    if user.password_hash != password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password"
+        )
     
     token = create_token(user.id)
     
