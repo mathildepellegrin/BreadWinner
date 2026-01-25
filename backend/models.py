@@ -42,6 +42,10 @@ class JobApplication(Base):
     requirements = Column(JSON, nullable=True)
     benefits = Column(JSON, nullable=True)
     url = Column(String, nullable=True)
+    status = Column(String, default="Applied")  # Applied, Interviewing, Rejected, Offer
+    match_score = Column(Integer, nullable=True)
+    gaps = Column(JSON, nullable=True)
+    tailored_bullet_points = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
@@ -55,6 +59,7 @@ class InterviewSession(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     job_application_id = Column(Integer, ForeignKey("job_applications.id"), nullable=True)
     mode = Column(String, nullable=False)  # technical, behavioral, case
+    session_type = Column(String, default="mock")  # mock, real-time-assistant
     conversation_history = Column(JSON, nullable=False, default=list)
     final_report = Column(Text, nullable=True)
     completed = Column(Boolean, default=False)

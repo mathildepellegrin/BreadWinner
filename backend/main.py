@@ -196,8 +196,89 @@ async def parse_resume(request: ResumeParseRequest, current_user: models.User = 
     return {"id": resume.id, "data": parsed_data}
 
 @app.post("/api/jobs/ingest")
-async def ingest_job(request: JobIngestRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"""Extract job information from the following and return JSON with exact fields:
+async def ingest_job(
+    request: JobIngestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Ingest job description and save to database"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    model = get_model()
+    
+    if request.url:
+        prompt = f"""
+        Extract job information from the following URL context.
+        Return JSON with: title, company, description, requirements (array), benefits (array).
+        
+        URL: {request.url}
+        """
+    else:
+        prompt = f"""
+        Extract job information from the following text.
+        Return JSON with: title, company, description, requirements (array), benefits (array).
+        
+        Job Description:
+        {request.description}
+        """
+    
+    try:
+        job_data = await safe_generate_json(model, prompt)
+        
+        # Save to database
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title=job_data.get("title", "Position"),
+            company=job_data.get("company", "Company"),
+            description=job_data.get("description", request.description or ""),
+            requirements=job_data.get("requirements", []),
+            benefits=job_data.get("benefits", []),
+            url=request.url
+        )
+        
+        return {
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "url": job_app.url
+        }
+    except Exception as e:
+        logger.error(f"Job ingestion failed: {e}")
+        # Fallback manual creation
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title="New Position",
+            company="Company",
+            description=request.description or "",
+            url=request.url
+        )
+        return {
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "url": job_app.url,
+            "warning": "Partial processing"
+        }
+
+@app.post("/api/resume/tailor")
+async def tailor_resume(
+    request: TailorResumeRequest,
+    token: str = Depends(verify_token)
+):
+    """Tailor resume for specific job description"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    model = get_model()
+    prompt = f"""
+    Act as an expert Career Strategist. Tailor the resume for the job description.
+    
+    Return JSON with these exact fields:
     {{
         "title": "Job Title",
         "company": "Company Name", 
@@ -210,16 +291,182 @@ async def ingest_job(request: JobIngestRequest, current_user: models.User = Depe
     
     job_data = await safe_generate_json(prompt)
     
-    job_app = crud.create_job_application(
-        db, current_user.id,
-        job_data.get("title", "Position"),
-        job_data.get("company", "Company"),
-        job_data.get("description", ""),
-        job_data.get("requirements", []),
-        job_data.get("benefits", []),
-        request.url
-    )
+    tailored_response = await safe_generate_json(model, prompt)
     
+    # If possible, find the job application and update it with tailored content
+    # For now, we return it; frontend can handle associating it
+    return tailored_response
+
+@app.patch("/api/jobs/{job_id}/status")
+async def update_job_status(
+    job_id: int,
+    request: JobStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the status of a job application"""
+    job = db.query(JobApplication).filter(JobApplication.id == job_id, JobApplication.user_id == current_user.id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.status = request.status
+    db.commit()
+    db.refresh(job)
+    return {"status": job.status}
+
+@app.get("/api/jobs/{job_id}/analysis")
+async def get_job_analysis(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get gap analysis and match score for a job"""
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if not job.gaps or not job.match_score:
+        # Generate analysis if not present
+        resume = crud.get_active_resume(db, current_user.id)
+        if not resume:
+            raise HTTPException(status_code=400, detail="Active resume required for analysis")
+            
+        model = get_model()
+        prompt = f"""
+        Perform a gap analysis between this resume and job description.
+        Resume: {json.dumps(resume.content)}
+        Job: {job.description}
+        
+        Return JSON:
+        {{
+            "matchScore": 0-100,
+            "gaps": ["missing skill 1", "missing skill 2"],
+            "strengths": ["matched skill 1"]
+        }}
+        """
+        analysis = await safe_generate_json(model, prompt)
+        job.match_score = analysis.get("matchScore")
+        job.gaps = analysis.get("gaps")
+        db.commit()
+        db.refresh(job)
+        return analysis
+        
+    return {
+        "matchScore": job.match_score,
+        "gaps": job.gaps
+    }
+
+@app.post("/api/interviews/question")
+async def get_question(
+    request: InterviewQuestionRequest,
+    token: str = Depends(verify_token)
+):
+    """Generate interview question with feedback"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    model = get_model()
+    prompt = f"""
+    You are an expert {request.mode} interviewer for: {request.jd.get('title', 'Position')} at {request.jd.get('company', 'Company')}.
+    
+    Candidate Profile Summary:
+    {json.dumps(request.profile, indent=2)[:1000]}
+    
+    Interview Mode: {request.mode}
+    
+    Conversation History:
+    {json.dumps(request.history[-5:], indent=2)}
+    
+    Tasks:
+    1. If there was a previous answer, provide constructive feedback (2-3 sentences)
+    2. Ask ONE new {request.mode} question appropriate for the role
+    3. Make the question challenging but fair
+    
+    Return JSON:
+    {{
+        "feedbackForLastAnswer": "feedback text or empty string if first question",
+        "question": "your interview question"
+    }}
+    """
+    
+    return await safe_generate_json(model, prompt)
+
+@app.post("/api/interviews/report")
+async def get_report(
+    request: InterviewReportRequest,
+    token: str = Depends(verify_token)
+):
+    """Generate comprehensive interview feedback report"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    model = get_model()
+    prompt = f"""
+    Generate a detailed interview performance report.
+    
+    Role: {request.jd.get('title', 'Position')} at {request.jd.get('company', 'Company')}
+    
+    Interview Transcript:
+    {json.dumps(request.history, indent=2)}
+    
+    Provide:
+    1. Overall performance rating (1-10)
+    2. Strengths demonstrated
+    3. Areas for improvement
+    4. Specific examples from the interview
+    5. Actionable recommendations
+    
+    Format as markdown.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return {"report": response.text}
+    except Exception as e:
+        logger.error(f"Report generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate report")
+
+@app.post("/api/prep/materials")
+async def get_prep(
+    request: PrepMaterialsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate interview preparation materials (Study Lab)"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    job = crud.get_job_application(db, request.job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    resume = crud.get_active_resume(db, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=400, detail="Active resume required")
+
+    model = get_model()
+    prompt = f"""
+    Generate Study Lab materials for: {job.title} at {job.company}.
+    
+    Job Description: {job.description}
+    Candidate Resume: {json.dumps(resume.content)}
+    
+    Return JSON with:
+    {{
+        "leetcodeRoadmap": [
+            {{"title": "Two Sum", "difficulty": "Easy", "link": "https://leetcode.com/problems/two-sum/", "relevance": "Top IBM Question"}}
+        ],
+        "cheatSheets": [
+            {{"topic": "Spring Boot", "tips": ["Tip 1", "Tip 2"]}}
+        ]
+    }}
+    """
+    
+    return await safe_generate_json(model, prompt)
+
+# --- Error Handlers ---
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
     return {
         "id": job_app.id,
         "title": job_app.title,
@@ -231,42 +478,25 @@ async def ingest_job(request: JobIngestRequest, current_user: models.User = Depe
         "created_at": job_app.created_at
     }
 
-@app.post("/api/resume/tailor")
-async def tailor_resume(request: TailorResumeRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"""Tailor this resume for this job description. Return JSON with:
-    {{
-        "tailored_resume": {{resume object with optimized content}},
-        "cover_letter": "professional cover letter text",
-        "match_score": 85,
-        "recommendations": ["rec1", "rec2"]
-    }}
+# --- New Database Management Endpoints ---
+@app.get("/api/dashboard/stats")
+async def dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get dashboard overview statistics"""
+    jobs_count = db.query(JobApplication).filter(JobApplication.user_id == current_user.id).count()
+    interviews_count = db.query(InterviewSession).filter(InterviewSession.user_id == current_user.id).count()
+    # Assuming success rate is based on "Offer" status
+    offers_count = db.query(JobApplication).filter(JobApplication.user_id == current_user.id, JobApplication.status == "Offer").count()
+    success_rate = (offers_count / jobs_count * 100) if jobs_count > 0 else 0
     
-    Resume: {json.dumps(request.resume)}
-    Job: {json.dumps(request.jd)}"""
-    return await safe_generate_json(prompt)
+    return {
+        "jobsTracked": jobs_count,
+        "interviewsPrepped": interviews_count,
+        "successRate": round(success_rate, 1)
+    }
 
-@app.post("/api/interviews/question")
-async def get_question(request: InterviewQuestionRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Mock interview question generator"""
-    prompt = f"""You are an interviewer for {request.mode} interview. 
-    Based on conversation history {json.dumps(request.history[-3:])}, 
-    provide feedback on last answer (if any) and ask one new question.
-    Return JSON: {{"feedback": "feedback text or empty", "question": "your question"}}
-    
-    Profile: {json.dumps(request.profile)}
-    Job: {json.dumps(request.jd)}"""
-    return await safe_generate_json(prompt)
-
-@app.post("/api/interviews/report")
-async def get_report(request: InterviewReportRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"Generate a comprehensive interview performance report based on this conversation: {json.dumps(request.history)}"
-    response = client.chat.completions.create(
-        model=settings.MODEL_NAME, 
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return {"report": response.choices[0].message.content}
-
-# --- Management Routes ---
 @app.get("/api/profile/resumes")
 async def get_resumes(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     resumes = crud.get_user_resumes(db, current_user.id)
@@ -288,6 +518,8 @@ async def get_job_applications(current_user: models.User = Depends(get_current_u
             "id": job.id,
             "title": job.title,
             "company": job.company,
+            "status": job.status,
+            "matchScore": job.match_score,
             "url": job.url,
             "created_at": job.created_at
         }
