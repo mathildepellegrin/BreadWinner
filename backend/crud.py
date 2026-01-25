@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import List, Optional, Dict, Any
-from models import User, Resume, JobApplication, InterviewSession
+from models import User, Resume, JobApplication, InterviewSession, Company, Question
 import hashlib
 
 # User CRUD
@@ -96,3 +96,29 @@ def get_user_interview_sessions(db: Session, user_id: int) -> List[InterviewSess
 
 def get_interview_session(db: Session, session_id: int, user_id: int) -> Optional[InterviewSession]:
     return db.query(InterviewSession).filter(InterviewSession.id == session_id, InterviewSession.user_id == user_id).first()
+
+# Company and Question CRUD
+def get_company_by_name(db: Session, name: str) -> Optional[Company]:
+    return db.query(Company).filter(Company.name.ilike(f"%{name}%")).first()
+
+def create_company(db: Session, name: str) -> Company:
+    company = Company(name=name)
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    return company
+
+def create_question(db: Session, company_id: int, category: str, title: str, text: str, 
+                   ideal_answer: str, leetcode_slug: str = None) -> Question:
+    question = Question(
+        company_id=company_id,
+        category=category,
+        title=title,
+        text=text,
+        leetcode_slug=leetcode_slug,
+        ideal_answer=ideal_answer
+    )
+    db.add(question)
+    db.commit()
+    db.refresh(question)
+    return question

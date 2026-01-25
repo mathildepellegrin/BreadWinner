@@ -1,7 +1,8 @@
 fastapi
 uvicorn
 python-multipart
-google-generativeai
+openai
+python-dotenv
 pydantic[email]
 sqlalchemy
 psycopg2-binary

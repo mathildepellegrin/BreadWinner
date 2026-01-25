@@ -63,3 +63,25 @@ class InterviewSession(Base):
     # Relationships
     user = relationship("User", back_populates="interview_sessions")
     job_application = relationship("JobApplication", back_populates="interview_sessions")
+
+# Add to backend/models.py
+
+class Company(Base):
+    __tablename__ = "companies"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True) # e.g., "Google"
+    last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    questions = relationship("Question", back_populates="company")
+
+class Question(Base):
+    __tablename__ = "questions"
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    category = Column(String) # "leetcode", "technical", "behavioral"
+    title = Column(String)    # e.g., "Two Sum"
+    text = Column(Text)     # The actual question prompt
+    leetcode_slug = Column(String, nullable=True) # e.g., "two-sum"
+    ideal_answer = Column(Text)
+
+    company = relationship("Company", back_populates="questions")

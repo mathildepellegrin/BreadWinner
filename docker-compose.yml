@@ -33,7 +33,7 @@ services:
       - ./backend:/app
     environment:
       - DATABASE_URL=postgresql://admin:hackathon_secret@db:5432/mock_interview
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     env_file:
       - .env
 
