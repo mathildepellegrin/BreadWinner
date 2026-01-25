@@ -2,24 +2,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import List, Optional, Dict, Any
 from models import User, Resume, JobApplication, InterviewSession, Company, Question
-from passlib.context import CryptContext
 import hashlib
-
-# Password hashing configuration
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
 
 # User CRUD
 def get_user_by_email(db: Session, email: str) -> Optional[User]:
     return db.query(User).filter(User.email == email).first()
 
 def create_user(db: Session, email: str, name: str, password: Optional[str] = None) -> User:
-    password_hash = get_password_hash(password) if password else None
+    password_hash = hashlib.sha256(password.encode()).hexdigest() if password else None
     user = User(email=email, name=name, password_hash=password_hash)
     db.add(user)
     db.commit()

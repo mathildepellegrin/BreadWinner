@@ -2,7 +2,6 @@ import { Link, useParams } from 'react-router';
 import { Brain, ArrowLeft, Mic, MicOff, Video, VideoOff, Phone } from 'lucide-react';
 import { mockInterviews } from '../lib/mockData';
 import { useState, useEffect } from 'react';
-import { LiveAvatar } from './LiveAvatar';
 
 type InterviewType = 'technical' | 'behavioral' | 'leetcode';
 
@@ -15,8 +14,6 @@ export function AISimulation() {
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isListening, setIsListening] = useState(false);
   const [interviewDuration, setInterviewDuration] = useState(0);
-  const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
-  const [liveKitUrl, setLiveKitUrl] = useState<string>('');
 
   useEffect(() => {
     if (hasStarted) {
@@ -63,25 +60,10 @@ export function AISimulation() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleStartInterview = async () => {
+  const handleStartInterview = () => {
     if (selectedTypes.length === 0) return;
     setHasStarted(true);
     setIsRecording(true);
-
-    // Fetch LiveKit token
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8000/api/livekit/token', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await response.json();
-      setLiveKitToken(data.token);
-      setLiveKitUrl(data.url);
-    } catch (error) {
-      console.error('Failed to fetch LiveKit token:', error);
-    }
   };
 
   const handleEndInterview = () => {
@@ -156,10 +138,11 @@ export function AISimulation() {
               <div className="grid gap-4">
                 <button
                   onClick={() => toggleType('technical')}
-                  className={`p-6 rounded-lg border-2 transition-all text-left ${selectedTypes.includes('technical')
+                  className={`p-6 rounded-lg border-2 transition-all text-left ${
+                    selectedTypes.includes('technical')
                       ? 'border-[#58a6ff] bg-[#1f6feb]/10'
                       : 'border-gray-700 hover:border-gray-600'
-                    }`}
+                  }`}
                 >
                   <div className="flex items-start justify-between">
                     <div>
@@ -182,10 +165,11 @@ export function AISimulation() {
 
                 <button
                   onClick={() => toggleType('behavioral')}
-                  className={`p-6 rounded-lg border-2 transition-all text-left ${selectedTypes.includes('behavioral')
+                  className={`p-6 rounded-lg border-2 transition-all text-left ${
+                    selectedTypes.includes('behavioral')
                       ? 'border-[#bc8cff] bg-[#8250df]/10'
                       : 'border-gray-700 hover:border-gray-600'
-                    }`}
+                  }`}
                 >
                   <div className="flex items-start justify-between">
                     <div>
@@ -208,10 +192,11 @@ export function AISimulation() {
 
                 <button
                   onClick={() => toggleType('leetcode')}
-                  className={`p-6 rounded-lg border-2 transition-all text-left ${selectedTypes.includes('leetcode')
+                  className={`p-6 rounded-lg border-2 transition-all text-left ${
+                    selectedTypes.includes('leetcode')
                       ? 'border-[#d29922] bg-[#d29922]/10'
                       : 'border-gray-700 hover:border-gray-600'
-                    }`}
+                  }`}
                 >
                   <div className="flex items-start justify-between">
                     <div>
@@ -269,7 +254,7 @@ export function AISimulation() {
               disabled={selectedTypes.length === 0}
               className="w-full py-4 bg-[#238636] text-white rounded-lg hover:bg-[#2ea043] font-semibold text-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#238636]"
             >
-              {selectedTypes.length === 0
+              {selectedTypes.length === 0 
                 ? 'Select at least one interview type'
                 : `Start ${getInterviewTypeLabel()} Interview`
               }
@@ -311,14 +296,32 @@ export function AISimulation() {
         <div className="w-full max-w-7xl grid lg:grid-cols-2 gap-6">
           {/* AI Avatar */}
           <div className="bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden aspect-video relative">
-            <LiveAvatar
-              token={liveKitToken || ''}
-              serverUrl={liveKitUrl}
-              isListening={isListening}
-            />
+            <div className="absolute inset-0 bg-gradient-to-br from-[#1f6feb]/20 to-[#8250df]/20 flex items-center justify-center">
+              <div
+                className={`size-48 rounded-full bg-gradient-to-br from-[#58a6ff] to-[#bc8cff] flex items-center justify-center transition-transform duration-300 ${
+                  isListening ? 'scale-110' : 'scale-100'
+                }`}
+              >
+                <Brain className="size-24 text-white" />
+              </div>
+
+              {/* Listening Indicator */}
+              {isListening && (
+                <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2">
+                  <div className="flex items-center gap-2 bg-[#1f6feb] text-white px-4 py-2 rounded-md border border-[#1f6feb]/40">
+                    <div className="flex gap-1">
+                      <div className="size-1 bg-white rounded-full animate-pulse" />
+                      <div className="size-1 bg-white rounded-full animate-pulse delay-75" />
+                      <div className="size-1 bg-white rounded-full animate-pulse delay-150" />
+                    </div>
+                    <span className="text-sm">AI is listening...</span>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Name Tag */}
-            <div className="absolute bottom-4 left-4 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-sm z-10">
+            <div className="absolute bottom-4 left-4 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-sm">
               AI Interviewer
             </div>
           </div>
@@ -359,10 +362,11 @@ export function AISimulation() {
         <div className="max-w-7xl mx-auto flex items-center justify-center gap-4">
           <button
             onClick={() => setIsCameraOn(!isCameraOn)}
-            className={`p-4 rounded-full transition-colors ${isCameraOn
+            className={`p-4 rounded-full transition-colors ${
+              isCameraOn
                 ? 'bg-[#21262d] hover:bg-[#30363d] text-white'
                 : 'bg-[#da3633] hover:bg-[#ff7b72] text-white'
-              }`}
+            }`}
             title={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
           >
             {isCameraOn ? <Video className="size-6" /> : <VideoOff className="size-6" />}
@@ -370,10 +374,11 @@ export function AISimulation() {
 
           <button
             onClick={() => setIsRecording(!isRecording)}
-            className={`p-4 rounded-full transition-colors ${isRecording
+            className={`p-4 rounded-full transition-colors ${
+              isRecording
                 ? 'bg-[#21262d] hover:bg-[#30363d] text-white'
                 : 'bg-[#da3633] hover:bg-[#ff7b72] text-white'
-              }`}
+            }`}
             title={isRecording ? 'Mute microphone' : 'Unmute microphone'}
           >
             {isRecording ? <Mic className="size-6" /> : <MicOff className="size-6" />}

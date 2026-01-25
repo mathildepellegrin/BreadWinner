@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from openai import OpenAI
 from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
-from livekit import api
 import crud
 
 # Configure logging
@@ -30,9 +29,6 @@ class Settings:
     MODEL_NAME: str = "google/gemini-2.0-flash-001"
     MAX_TEXT_LENGTH: int = 50000
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
-    LIVEKIT_API_KEY: str = os.environ.get("LIVEKIT_API_KEY", "devkey")
-    LIVEKIT_API_SECRET: str = os.environ.get("LIVEKIT_API_SECRET", "secret")
-    LIVEKIT_URL: str = os.environ.get("LIVEKIT_URL", "http://localhost:7880")
 
 settings = Settings()
 
@@ -50,11 +46,6 @@ client = OpenAI(
 class LoginRequest(BaseModel):
     email: EmailStr
     password: Optional[str] = None
-
-class SignupRequest(BaseModel):
-    email: EmailStr
-    password: str
-    name: str
 
 class ResumeParseRequest(BaseModel):
     text: str = Field(..., max_length=settings.MAX_TEXT_LENGTH)
@@ -161,16 +152,16 @@ async def health():
         "api_key_configured": bool(settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY)
     }
 
-@app.post("/api/auth/signup")
-async def signup(request: SignupRequest, db: Session = Depends(get_db)):
+@app.post("/api/auth/login")
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
-    Signup endpoint - creates a new user
+    Login endpoint - creates user if doesn't exist
     """
-    existing_user = crud.get_user_by_email(db, request.email)
-    if existing_user:
-        raise HTTPException(status_code=400, detail="User already exists")
-    
-    user = crud.create_user(db, request.email, request.name, request.password)
+    user = crud.get_user_by_email(db, request.email)
+    if not user:
+        # Create new user
+        name = request.email.split('@')[0].capitalize()
+        user = crud.create_user(db, request.email, name, request.password)
     
     token = create_token(user.id)
     
@@ -181,30 +172,93 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
         "token": token
     }
 
-@app.post("/api/auth/login")
-async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """
-    Login endpoint - verifies credentials
-    """
-    user = crud.get_user_by_email(db, request.email)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    if request.password and user.password_hash:
-        if not crud.verify_password(request.password, user.password_hash):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-    elif request.password: # User exists but has no password hash (shouldn't happen with signup fixed)
-         # Fallback for legacy users or handle as needed
-         pass
-    
-    token = create_token(user.id)
-    
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "token": token
-    }
+# --- Company Questions Cache ---
+@app.get("/api/prep/company/{company_name}")
+async def get_company_prep(
+    company_name: str, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Check cache for company questions; generate via AI if not found."""
+    try:
+        # Configuration - easily changeable later
+        QUESTIONS_PER_CATEGORY = 1  # Change to 5 later
+        
+        company = crud.get_company_by_name(db, company_name)
+        
+        if company and company.questions:
+            logger.info(f"Cache Hit for {company_name}")
+            questions_data = [
+                {
+                    "id": q.id,
+                    "category": q.category,
+                    "title": q.title,
+                    "text": q.text,
+                    "leetcode_slug": q.leetcode_slug,
+                    "ideal_answer": q.ideal_answer
+                }
+                for q in company.questions
+            ]
+            return {
+                "company": company.name,
+                "questions": questions_data,
+                "cached": True,
+                "generated_at": company.last_updated.isoformat() if company.last_updated else None
+            }
+
+        logger.info(f"Cache Miss for {company_name}. Generating new questions...")
+        
+        # Return mock data for now
+        return {
+            "company": company_name,
+            "questions": [
+                {
+                    "id": 1,
+                    "category": "leetcode",
+                    "title": "Two Sum",
+                    "text": "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.",
+                    "leetcode_slug": "two-sum",
+                    "ideal_answer": "Use hashmap to store complements. Time: O(n), Space: O(n)"
+                },
+                {
+                    "id": 2,
+                    "category": "technical",
+                    "title": "System Design",
+                    "text": f"How would you design a scalable system at {company_name}?",
+                    "leetcode_slug": None,
+                    "ideal_answer": "Consider microservices, load balancing, and database optimization."
+                },
+                {
+                    "id": 3,
+                    "category": "behavioral",
+                    "title": "Team Collaboration",
+                    "text": "Tell me about a time when you had to work with a difficult team member.",
+                    "leetcode_slug": None,
+                    "ideal_answer": "Use STAR method: Situation, Task, Action, Result."
+                }
+            ],
+            "cached": False,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in company prep for {company_name}: {e}")
+        return {
+            "company": company_name,
+            "questions": [
+                {
+                    "id": 1,
+                    "category": "leetcode",
+                    "title": "Array Problem",
+                    "text": "Solve a common array manipulation problem.",
+                    "leetcode_slug": None,
+                    "ideal_answer": "Focus on time and space complexity."
+                }
+            ],
+            "cached": False,
+            "generated_at": datetime.now().isoformat(),
+            "error": "Fallback data"
+        }
 
 # --- Company Questions Cache ---
 @app.get("/api/prep/company/{company_name}")
@@ -390,50 +444,6 @@ async def parse_resume(
         "data": parsed_data,
         "created_at": resume.created_at
     }
-@app.post("/api/profile/resumes")
-async def save_resume(
-    request: Dict[str, Any],
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Save structured resume data to database"""
-    resume_name = request.get("name", f"Resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    content = request.get("data")
-    original_text = request.get("text", "")
-    
-    if not content:
-        raise HTTPException(status_code=400, detail="Resume data is required")
-    
-    resume = crud.create_resume(db, current_user.id, resume_name, content, original_text)
-    
-    return {
-        "id": resume.id,
-        "name": resume.name,
-        "created_at": resume.created_at
-    }
-
-# --- LiveKit Route ---
-@app.get("/api/livekit/token")
-async def get_livekit_token(
-    current_user: User = Depends(get_current_user)
-):
-    """Generate LiveKit access token"""
-    try:
-        room_name = f"interview-{current_user.id}"
-        participant_name = current_user.name
-        
-        token = api.AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET) \
-            .with_identity(str(current_user.id)) \
-            .with_name(participant_name) \
-            .with_grants(api.VideoGrants(
-                room_join=True,
-                room=room_name
-            ))
-            
-        return {"token": token.to_jwt(), "url": settings.LIVEKIT_URL, "room": room_name}
-    except Exception as e:
-        logger.error(f"LiveKit token generation failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate LiveKit token")
 
 @app.post("/api/jobs/ingest")
 async def ingest_job(
