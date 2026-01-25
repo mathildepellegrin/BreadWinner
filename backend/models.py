@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, ForeignKey, Boolean
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -60,8 +61,9 @@ class InterviewSession(Base):
     job_application_id = Column(Integer, ForeignKey("job_applications.id"), nullable=True)
     mode = Column(String, nullable=False)  # technical, behavioral, case
     session_type = Column(String, default="mock")  # mock, real-time-assistant
-    conversation_history = Column(JSON, nullable=False, default=list)
-    final_report = Column(Text, nullable=True)
+    transcript = Column(JSONB, nullable=False, default=list)
+    feedback_report = Column(Text, nullable=True)
+    score = Column(Integer, nullable=True)
     completed = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     

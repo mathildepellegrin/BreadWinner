@@ -35,6 +35,8 @@ services:
       - DATABASE_URL=postgresql://admin:hackathon_secret@db:5432/mock_interview
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+      - HEYGEN_API_KEY=${HEYGEN_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
     env_file:
       - .env
 
@@ -43,10 +45,12 @@ services:
     build: ./frontend/interviewPrep
     container_name: interview_frontend
     ports:
-      - "5173:3000"
+      - "5173:5173" 
     volumes:
       - ./frontend/interviewPrep:/app
       - /app/node_modules
+    # Automatically fix auth issues, install missing package, and start dev server
+    command: npm run dev -- --host 0.0.0.0
     stdin_open: true
 
 volumes:

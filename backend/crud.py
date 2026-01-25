@@ -80,12 +80,14 @@ def create_interview_session(db: Session, user_id: int, mode: str, job_applicati
     return session
 
 def update_interview_session(db: Session, session_id: int, conversation_history: List[Dict], 
-                           final_report: str = None, completed: bool = False) -> Optional[InterviewSession]:
+                           final_report: str = None, score: int = None, completed: bool = False) -> Optional[InterviewSession]:
     session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
     if session:
         session.conversation_history = conversation_history
         if final_report:
             session.final_report = final_report
+        if score is not None:
+            session.score = score
         session.completed = completed
         db.commit()
         db.refresh(session)

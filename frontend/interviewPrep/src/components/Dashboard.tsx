@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router';
-import { Brain, LogOut, Calendar, CheckCircle, Circle, Plus, User, Loader2 } from 'lucide-react';
+import { Brain, LogOut, Calendar, CheckCircle, Circle, Plus, User, Loader2, ChevronDown, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 interface Job {
@@ -19,6 +19,7 @@ interface InterviewSession {
   job_title: string | null;
   company: string | null;
   created_at: string;
+  transcript?: { role: string; content: string }[];
 }
 
 export function Dashboard() {
@@ -26,6 +27,7 @@ export function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [interviews, setInterviews] = useState<InterviewSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expandedSessionId, setExpandedSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -219,67 +221,79 @@ export function Dashboard() {
             </span>
           </div>
 
-          <div className="bg-white border border-[#d0d7de] rounded-lg overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-[#d0d7de] bg-[#f6f8fa]">
-                    <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Company</th>
-                    <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Position</th>
-                    <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Date</th>
-                    <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Type</th>
-                    <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#d0d7de]">
-                  {interviews.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-6 py-8 text-center text-[#656d76]">
-                        No interview sessions recorded yet.
-                      </td>
-                    </tr>
-                  ) : interviews.map((session) => (
-                    <tr
-                      key={session.id}
-                      className="hover:bg-[#f6f8fa] transition-colors"
-                    >
-                      <td className="px-6 py-4">
-                        <span className="font-semibold text-[#656d76]">{session.company || 'Unknown'}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="text-[#656d76]">{session.job_title || 'General Practice'}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 text-[#656d76]">
-                          <Calendar className="size-4" />
-                          <span className="text-sm">{formatDate(session.created_at)}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-block px-3 py-1 bg-[#f6f8fa] text-[#656d76] border border-[#d0d7de] rounded-md text-sm capitalize">
-                          {session.mode}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          {session.completed ? (
-                            <>
-                              <CheckCircle className="size-4 text-[#1a7f37]" />
-                              <span className="text-sm text-[#656d76]">Completed</span>
-                            </>
-                          ) : (
-                            <>
-                              <Circle className="size-4 text-[#9a6700]" />
-                              <span className="text-sm text-[#656d76]">In Progress</span>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div className="space-y-2">
+            {interviews.length === 0 ? (
+              <div className="bg-white border border-[#d0d7de] rounded-lg px-6 py-8 text-center text-[#656d76]">
+                No interview sessions recorded yet.
+              </div>
+            ) : (
+              interviews.map((session) => (
+                <div
+                  key={session.id}
+                  className="bg-white border border-[#d0d7de] rounded-lg overflow-hidden"
+                >
+                  <button
+                    onClick={() => setExpandedSessionId(expandedSessionId === session.id ? null : session.id)}
+                    className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#f6f8fa] transition-colors"
+                  >
+                    <div className="flex items-center gap-6 flex-1 text-left">
+                      <div className="flex-1">
+                        <div className="font-semibold text-[#1f2328]">{session.company || 'Unknown'}</div>
+                        <div className="text-sm text-[#656d76]">{session.job_title || 'General Practice'}</div>
+                      </div>
+                      <div className="text-sm text-[#656d76]">{formatDate(session.created_at)}</div>
+                      <span className="inline-block px-3 py-1 bg-[#f6f8fa] text-[#656d76] border border-[#d0d7de] rounded-md text-sm capitalize">
+                        {session.mode}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {session.completed ? (
+                          <>
+                            <CheckCircle className="size-4 text-[#1a7f37]" />
+                            <span className="text-sm text-[#656d76]">Completed</span>
+                          </>
+                        ) : (
+                          <>
+                            <Circle className="size-4 text-[#9a6700]" />
+                            <span className="text-sm text-[#656d76]">In Progress</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <ChevronDown
+                      className={`size-5 text-[#656d76] transition-transform ${
+                        expandedSessionId === session.id ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+
+                  {/* Expanded Transcript View */}
+                  {expandedSessionId === session.id && session.transcript && session.transcript.length > 0 && (
+                    <div className="border-t border-[#d0d7de] p-6 bg-[#f6f8fa]">
+                      <h4 className="font-semibold text-[#1f2328] mb-4">Interview Transcript</h4>
+                      <div className="space-y-4 max-h-96 overflow-y-auto">
+                        {session.transcript.map((entry, idx) => (
+                          <div
+                            key={idx}
+                            className={`p-3 rounded-md ${
+                              entry.role === 'user'
+                                ? 'bg-[#ddf4ff] border border-[#54aeff] text-[#1f2328]'
+                                : 'bg-[#dafbe1] border border-[#56d364] text-[#1f2328]'
+                            }`}
+                          >
+                            <div className="font-semibold text-sm mb-1">
+                              {entry.role === 'user' ? '👤 You' : '🤖 Interviewer'}
+                            </div>
+                            <div className="text-sm whitespace-pre-wrap break-words">
+                              {entry.content}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </section>
       </main>

@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import requests
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Body, Depends, Security, status
@@ -10,6 +11,7 @@ from pydantic import BaseModel, EmailStr, Field, validator
 import logging
 from sqlalchemy.orm import Session
 from openai import OpenAI
+from sqlalchemy import text
 from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
 import crud
@@ -23,6 +25,36 @@ logger = logging.getLogger(__name__)
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
+def run_migrations():
+    """Check for missing columns and alter tables if necessary."""
+    try:
+        with engine.connect() as conn:
+            # Check if 'score' column exists in 'interview_sessions'
+            result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='interview_sessions' AND column_name='score'"))
+            if not result.fetchone():
+                logger.info("Migration: Adding 'score' column to interview_sessions")
+                conn.execute(text("ALTER TABLE interview_sessions ADD COLUMN score INTEGER"))
+                conn.commit()
+            
+            # Check for 'transcript' column (migration from conversation_history)
+            result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='interview_sessions' AND column_name='transcript'"))
+            if not result.fetchone():
+                logger.info("Migration: Adding 'transcript' column to interview_sessions")
+                conn.execute(text("ALTER TABLE interview_sessions ADD COLUMN transcript JSONB DEFAULT '[]'"))
+                conn.execute(text("ALTER TABLE interview_sessions ADD COLUMN feedback_report TEXT"))
+                conn.commit()
+            
+            # Fix for legacy conversation_history not-null constraint
+            result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='interview_sessions' AND column_name='conversation_history'"))
+            if result.fetchone():
+                logger.info("Migration: Removing NOT NULL constraint from conversation_history")
+                conn.execute(text("ALTER TABLE interview_sessions ALTER COLUMN conversation_history DROP NOT NULL"))
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+
+run_migrations()
+
 # --- Configuration ---
 class Settings:
     OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
@@ -32,6 +64,8 @@ class Settings:
     MAX_TEXT_LENGTH: int = 50000
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
     FIRECRAWL_API_KEY: str = os.environ.get("FIRECRAWL_API_KEY", "")
+    HEYGEN_API_KEY: str = os.environ.get("HEYGEN_API_KEY", "")
+    ELEVENLABS_API_KEY: str = os.environ.get("ELEVENLABS_API_KEY", "")
 
 settings = Settings()
 
@@ -105,6 +139,14 @@ class JobCreateRequest(BaseModel):
 
 class PrepMaterialsRequest(BaseModel):
     job_id: int
+
+class InterviewChatRequest(BaseModel):
+    session_id: int
+    user_answer_text: str
+
+class InterviewSessionCreateRequest(BaseModel):
+    job_id: Optional[int] = None
+    mode: str = "technical"
 
 # --- Security ---
 security = HTTPBearer()
@@ -236,94 +278,6 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         "name": user.name,
         "token": token
     }
-# --- Company Questions Cache ---
-@app.get("/api/prep/company/{company_name}")
-async def get_company_prep(
-    company_name: str, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
-    """Check cache for company questions; generate via AI if not found."""
-    try:
-        # Configuration - easily changeable later
-        QUESTIONS_PER_CATEGORY = 1  # Change to 5 later
-        
-        company = crud.get_company_by_name(db, company_name)
-        
-        if company and company.questions:
-            logger.info(f"Cache Hit for {company_name}")
-            questions_data = [
-                {
-                    "id": q.id,
-                    "category": q.category,
-                    "title": q.title,
-                    "text": q.text,
-                    "leetcode_slug": q.leetcode_slug,
-                    "ideal_answer": q.ideal_answer
-                }
-                for q in company.questions
-            ]
-            return {
-                "company": company.name,
-                "questions": questions_data,
-                "cached": True,
-                "generated_at": company.last_updated.isoformat() if company.last_updated else None
-            }
-
-        logger.info(f"Cache Miss for {company_name}. Generating new questions...")
-        
-        # Return mock data for now
-        return {
-            "company": company_name,
-            "questions": [
-                {
-                    "id": 1,
-                    "category": "leetcode",
-                    "title": "Two Sum",
-                    "text": "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.",
-                    "leetcode_slug": "two-sum",
-                    "ideal_answer": "Use hashmap to store complements. Time: O(n), Space: O(n)"
-                },
-                {
-                    "id": 2,
-                    "category": "technical",
-                    "title": "System Design",
-                    "text": f"How would you design a scalable system at {company_name}?",
-                    "leetcode_slug": None,
-                    "ideal_answer": "Consider microservices, load balancing, and database optimization."
-                },
-                {
-                    "id": 3,
-                    "category": "behavioral",
-                    "title": "Team Collaboration",
-                    "text": "Tell me about a time when you had to work with a difficult team member.",
-                    "leetcode_slug": None,
-                    "ideal_answer": "Use STAR method: Situation, Task, Action, Result."
-                }
-            ],
-            "cached": False,
-            "generated_at": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in company prep for {company_name}: {e}")
-        return {
-            "company": company_name,
-            "questions": [
-                {
-                    "id": 1,
-                    "category": "leetcode",
-                    "title": "Array Problem",
-                    "text": "Solve a common array manipulation problem.",
-                    "leetcode_slug": None,
-                    "ideal_answer": "Focus on time and space complexity."
-                }
-            ],
-            "cached": False,
-            "generated_at": datetime.now().isoformat(),
-            "error": "Fallback data"
-        }
-
 # --- Company Questions Cache ---
 @app.get("/api/prep/company/{company_name}")
 async def get_company_prep(
@@ -770,6 +724,156 @@ async def get_question(
     
     return await safe_generate_json(prompt)
 
+@app.get("/api/interviews/token")
+async def get_heygen_token(current_user: User = Depends(get_current_user)):
+    """Fetch HeyGen streaming token"""
+    if not settings.HEYGEN_API_KEY:
+        raise HTTPException(status_code=503, detail="HeyGen API key not configured")
+    
+    try:
+        # HeyGen requires a POST request with an empty body to create token
+        response = requests.post(
+            "https://api.heygen.com/v1/streaming.create_token",
+            headers={
+                "X-Api-Key": settings.HEYGEN_API_KEY,
+                "Content-Type": "application/json"
+            },
+            json={}  # Empty JSON body
+        )
+        response.raise_for_status()
+        heygen_data = response.json()
+        logger.info(f"HeyGen token creation successful: {heygen_data}")
+        # Return the full response from HeyGen
+        return heygen_data
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HeyGen token creation failed: Status {e.response.status_code}, Response: {e.response.text}")
+        raise HTTPException(status_code=500, detail=f"HeyGen token creation failed: {e.response.text}")
+    except Exception as e:
+        logger.error(f"HeyGen token fetch failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch streaming token")
+
+@app.post("/api/interviews/chat")
+async def chat_simulation(
+    request: InterviewChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dynamic Interview Simulation Engine"""
+    session = db.query(InterviewSession).filter(InterviewSession.id == request.session_id, InterviewSession.user_id == current_user.id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # 1. Update transcript with user answer
+    history = list(session.transcript)
+    if history and history[-1]['role'] == 'assistant':
+        history.append({"role": "user", "content": request.user_answer_text})
+    
+    # 2. AI Analysis
+    job = session.job_application
+    company_name = job.company if job else "the company"
+    job_title = job.title if job else "Software Engineer"
+    
+    prompt = f"""
+    You are an expert interviewer for {company_name} hiring a {job_title}.
+    Mode: {session.mode}
+    
+    Conversation History:
+    {json.dumps(history[-4:], indent=2)}
+    
+    User's Last Answer: "{request.user_answer_text}"
+    
+    Task:
+    1. Evaluate the user's answer (Score 1-10).
+    2. If score < 7 or answer is vague: Set action="DRILL_DOWN". Generate a specific follow-up question.
+    3. If score >= 7: Set action="NEXT".
+    
+    Return JSON:
+    {{
+        "score": 8,
+        "action": "NEXT" or "DRILL_DOWN",
+        "question": "The next question text (if drill down)"
+    }}
+    """
+    
+    analysis = await safe_generate_json(prompt)
+    next_question_text = ""
+    
+    if analysis.get("action") == "DRILL_DOWN":
+        next_question_text = analysis.get("question")
+    else:
+        # Fetch next question from cache
+        company = crud.get_company_by_name(db, company_name)
+        cached_questions = company.questions if company else []
+        
+        # Filter out already asked questions
+        asked_texts = [h['content'] for h in history if h['role'] == 'assistant']
+        available_questions = [
+            q for q in cached_questions 
+            if q.text not in asked_texts and (q.category == session.mode or session.mode == "mock")
+        ]
+        
+        if available_questions:
+            next_question_text = available_questions[0].text
+        else:
+            # Generate generic next question if cache exhausted
+            gen_prompt = f"Generate a challenging {session.mode} interview question for {job_title} at {company_name}."
+            gen_res = await safe_generate_json(f"Return JSON {{ 'question': '...' }} based on: {gen_prompt}")
+            next_question_text = gen_res.get("question")
+
+    # 3. Update transcript with AI question
+    history.append({"role": "assistant", "content": next_question_text})
+    
+    # 4. Save to DB (Direct update to avoid crud dependency issues with renamed fields)
+    session.transcript = history
+    db.commit()
+    db.refresh(session)
+    
+    return {"next_question_text": next_question_text}
+
+@app.post("/api/interviews/sessions")
+async def create_interview_session_endpoint(
+    request: InterviewSessionCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Start a new interview session"""
+    # Direct creation to ensure transcript field is used
+    session = InterviewSession(
+        user_id=current_user.id,
+        mode=request.mode,
+        job_application_id=request.job_id,
+        transcript=[]
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return {"session_id": session.id}
+
+@app.post("/api/interviews/sessions/{session_id}/complete")
+async def complete_interview_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Mark an interview session as completed"""
+    session = db.query(InterviewSession).filter(
+        InterviewSession.id == session_id,
+        InterviewSession.user_id == current_user.id
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session.completed = True
+    db.commit()
+    db.refresh(session)
+    
+    return {
+        "message": "Session marked as completed",
+        "session_id": session.id,
+        "transcript": session.transcript
+    }
+
 @app.post("/api/interviews/report")
 async def get_report(
     request: InterviewReportRequest,
@@ -791,22 +895,35 @@ async def get_report(
     Provide:
     1. Overall performance rating (1-10)
     2. Strengths demonstrated
-    3. Areas for improvement
-    4. Specific examples from the interview
-    5. Actionable recommendations
+    3. Areas for improvement (Technical & Communication)
+    4. Actionable recommendations
+    5. Final Score (0-100)
     
-    Format as markdown.
+    Return JSON:
+    {{
+        "report_markdown": "full markdown report...",
+        "score": 85
+    }}
     """
     
     try:
-        response = client.chat.completions.create(
-            model=settings.MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return {"report": response.choices[0].message.content}
+        result = await safe_generate_json(prompt)
+        
+        # Try to find the session if possible, otherwise just return report
+        # Ideally request should have session_id. 
+        # For now, we return the data.
+        
+        return {
+            "report": result.get("report_markdown"),
+            "score": result.get("score")
+        }
     except Exception as e:
         logger.error(f"Report generation failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate report")
+        # Fallback
+        return {
+            "report": "## Interview Feedback\n\nAnalysis failed. Please try again.",
+            "score": 0
+        }
 
 @app.post("/api/prep/materials")
 async def get_prep(
@@ -946,7 +1063,7 @@ async def get_interview_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get user's interview history"""
+    """Get user's interview history with transcripts"""
     sessions = crud.get_user_interview_sessions(db, current_user.id)
     return [
         {
@@ -955,7 +1072,8 @@ async def get_interview_history(
             "completed": session.completed,
             "job_title": session.job_application.title if session.job_application else None,
             "company": session.job_application.company if session.job_application else None,
-            "created_at": session.created_at
+            "created_at": session.created_at,
+            "transcript": session.transcript
         }
         for session in sessions
     ]

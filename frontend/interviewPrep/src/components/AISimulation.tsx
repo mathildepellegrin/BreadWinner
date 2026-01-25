@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router';
 import { Brain, ArrowLeft, Mic, MicOff, Video, VideoOff, Phone } from 'lucide-react';
 import { mockInterviews } from '../lib/mockData';
 import { useState, useEffect } from 'react';
+import InterviewRoom from './InterviewRoom';
 
 type InterviewType = 'technical' | 'behavioral' | 'leetcode';
 
@@ -14,6 +15,7 @@ export function AISimulation() {
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isListening, setIsListening] = useState(false);
   const [interviewDuration, setInterviewDuration] = useState(0);
+  const [sessionId, setSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     if (hasStarted) {
@@ -60,15 +62,33 @@ export function AISimulation() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleStartInterview = () => {
+  const handleStartInterview = async () => {
     if (selectedTypes.length === 0) return;
-    setHasStarted(true);
-    setIsRecording(true);
+    
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:8000/api/interviews/sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          mode: selectedTypes[0], // Using first selected type for now
+          job_id: null // Or map to real job ID if available
+        })
+      });
+      const data = await res.json();
+      setSessionId(data.session_id);
+      setHasStarted(true);
+    } catch (error) {
+      console.error("Failed to start session:", error);
+    }
   };
 
   const handleEndInterview = () => {
-    // In a real app, this would save the interview data and redirect
-    alert('Interview ended! Results would be saved here.');
+    setHasStarted(false);
+    setSessionId(null);
   };
 
   const toggleType = (type: InterviewType) => {
@@ -265,134 +285,10 @@ export function AISimulation() {
     );
   }
 
-  // Active interview screen (like Teams/Zoom)
+  // Active interview screen
   return (
     <div className="min-h-screen bg-[#010409] flex flex-col">
-      {/* Top Bar */}
-      <header className="bg-[#0d1117] border-b border-gray-800 px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Brain className="size-6 text-[#58a6ff]" />
-            <div>
-              <h1 className="text-white font-semibold">
-                {interview.company} - {getInterviewTypeLabel()} Interview
-              </h1>
-              <p className="text-gray-500 text-sm">Duration: {formatDuration(interviewDuration)}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {isRecording && (
-              <div className="flex items-center gap-2 bg-[#da3633]/20 text-[#ff7b72] px-3 py-1 rounded-md border border-[#da3633]/40">
-                <div className="size-2 bg-[#ff7b72] rounded-full animate-pulse" />
-                <span className="text-sm font-medium">Recording</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* Video Grid */}
-      <main className="flex-1 p-6 flex items-center justify-center">
-        <div className="w-full max-w-7xl grid lg:grid-cols-2 gap-6">
-          {/* AI Avatar */}
-          <div className="bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden aspect-video relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-[#1f6feb]/20 to-[#8250df]/20 flex items-center justify-center">
-              <div
-                className={`size-48 rounded-full bg-gradient-to-br from-[#58a6ff] to-[#bc8cff] flex items-center justify-center transition-transform duration-300 ${
-                  isListening ? 'scale-110' : 'scale-100'
-                }`}
-              >
-                <Brain className="size-24 text-white" />
-              </div>
-
-              {/* Listening Indicator */}
-              {isListening && (
-                <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2">
-                  <div className="flex items-center gap-2 bg-[#1f6feb] text-white px-4 py-2 rounded-md border border-[#1f6feb]/40">
-                    <div className="flex gap-1">
-                      <div className="size-1 bg-white rounded-full animate-pulse" />
-                      <div className="size-1 bg-white rounded-full animate-pulse delay-75" />
-                      <div className="size-1 bg-white rounded-full animate-pulse delay-150" />
-                    </div>
-                    <span className="text-sm">AI is listening...</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Name Tag */}
-            <div className="absolute bottom-4 left-4 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-sm">
-              AI Interviewer
-            </div>
-          </div>
-
-          {/* User Video */}
-          <div className="bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden aspect-video relative">
-            <div className="absolute inset-0 bg-[#0d1117] flex items-center justify-center">
-              {isCameraOn ? (
-                <div className="text-center">
-                  <Video className="size-20 text-gray-600 mx-auto mb-3" />
-                  <p className="text-gray-500">Your camera feed</p>
-                </div>
-              ) : (
-                <div className="text-center">
-                  <VideoOff className="size-20 text-gray-600 mx-auto mb-3" />
-                  <p className="text-gray-500">Camera is off</p>
-                </div>
-              )}
-            </div>
-
-            {/* Name Tag */}
-            <div className="absolute bottom-4 left-4 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-sm">
-              You
-            </div>
-
-            {/* Mic Status */}
-            {!isRecording && (
-              <div className="absolute top-4 left-4 bg-[#da3633]/20 text-[#ff7b72] p-2 rounded-md border border-[#da3633]/40">
-                <MicOff className="size-5" />
-              </div>
-            )}
-          </div>
-        </div>
-      </main>
-
-      {/* Bottom Control Bar */}
-      <footer className="bg-[#0d1117] border-t border-gray-800 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-center gap-4">
-          <button
-            onClick={() => setIsCameraOn(!isCameraOn)}
-            className={`p-4 rounded-full transition-colors ${
-              isCameraOn
-                ? 'bg-[#21262d] hover:bg-[#30363d] text-white'
-                : 'bg-[#da3633] hover:bg-[#ff7b72] text-white'
-            }`}
-            title={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
-          >
-            {isCameraOn ? <Video className="size-6" /> : <VideoOff className="size-6" />}
-          </button>
-
-          <button
-            onClick={() => setIsRecording(!isRecording)}
-            className={`p-4 rounded-full transition-colors ${
-              isRecording
-                ? 'bg-[#21262d] hover:bg-[#30363d] text-white'
-                : 'bg-[#da3633] hover:bg-[#ff7b72] text-white'
-            }`}
-            title={isRecording ? 'Mute microphone' : 'Unmute microphone'}
-          >
-            {isRecording ? <Mic className="size-6" /> : <MicOff className="size-6" />}
-          </button>
-
-          <button
-            onClick={handleEndInterview}
-            className="px-6 py-4 bg-[#da3633] hover:bg-[#ff7b72] text-white rounded-full font-semibold transition-colors flex items-center gap-2"
-          >
-            <Phone className="size-5 rotate-135" />
-            End Interview
-          </button>
-        </div>
-      </footer>
+      {sessionId && <InterviewRoom sessionId={sessionId} onFinish={handleEndInterview} />}
     </div>
   );
 }
