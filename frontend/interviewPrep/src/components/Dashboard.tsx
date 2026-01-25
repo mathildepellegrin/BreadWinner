@@ -169,10 +169,14 @@ export function Dashboard() {
                       className="hover:bg-[#f6f8fa] transition-colors"
                     >
                       <td className="px-6 py-4">
-                        <span className="font-semibold text-[#1f2328]">{job.company}</span>
+                        <Link to={`/interview/${job.id}`} className="font-semibold text-[#1f2328] hover:text-[#0969da] hover:underline">
+                          {job.company}
+                        </Link>
                       </td>
                       <td className="px-6 py-4">
-                        <span className="text-[#656d76]">{job.title}</span>
+                        <Link to={`/interview/${job.id}`} className="text-[#656d76] hover:text-[#1f2328]">
+                          {job.title}
+                        </Link>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2 text-[#656d76]">

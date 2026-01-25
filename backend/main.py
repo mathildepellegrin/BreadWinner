@@ -816,30 +816,32 @@ async def get_prep(
 ):
     """Generate interview preparation materials (Study Lab)"""
     if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
-        raise HTTPException(status_code=503, detail="AI service not configured")
+        # Return generic fallback data so the UI isn't empty if AI is not configured
+        return {
+            "technical_topics": ["System Design", "Scalability", "API Design", "Database Normalization", "Microservices"],
+            "behavioral_topics": ["Conflict Resolution", "Leadership", "Project Management", "Adaptability", "Communication"],
+            "leetcode_topics": ["Arrays & Hashing", "Two Pointers", "Sliding Window", "Trees & Graphs", "Dynamic Programming"]
+        }
     
     job = crud.get_job_application(db, request.job_id, current_user.id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
+    # Make resume optional - generate based on JD if no resume exists
     resume = crud.get_active_resume(db, current_user.id)
-    if not resume:
-        raise HTTPException(status_code=400, detail="Active resume required")
+    resume_content = json.dumps(resume.content) if resume else "No resume provided. Focus on the job description."
 
     prompt = f"""
     Generate Study Lab materials for: {job.title} at {job.company}.
     
     Job Description: {job.description}
-    Candidate Resume: {json.dumps(resume.content)}
+    Candidate Resume: {resume_content}
     
-    Return JSON with:
+    Return JSON with these exact keys containing arrays of 5 strings each:
     {{
-        "leetcodeRoadmap": [
-            {{"title": "Two Sum", "difficulty": "Easy", "link": "https://leetcode.com/problems/two-sum/", "relevance": "Top IBM Question"}}
-        ],
-        "cheatSheets": [
-            {{"topic": "Spring Boot", "tips": ["Tip 1", "Tip 2"]}}
-        ]
+        "technical_topics": ["topic1", ...],
+        "behavioral_topics": ["topic1", ...],
+        "leetcode_topics": ["topic1", ...]
     }}
     """
     
@@ -912,6 +914,32 @@ async def get_job_applications(
         }
         for job in jobs
     ]
+
+@app.get("/api/jobs/{job_id}")
+async def get_job_detail(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get details of a specific job application"""
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return {
+        "id": job.id,
+        "title": job.title,
+        "company": job.company,
+        "description": job.description,
+        "requirements": job.requirements,
+        "benefits": job.benefits,
+        "status": job.status,
+        "url": job.url,
+        "created_at": job.created_at,
+        # Safely access potentially missing fields if schema isn't fully updated
+        "location": getattr(job, "location", None),
+        "salary": getattr(job, "salary", None)
+    }
 
 @app.get("/api/interviews/history")
 async def get_interview_history(

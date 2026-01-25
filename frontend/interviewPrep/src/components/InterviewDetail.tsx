@@ -1,17 +1,89 @@
 import { Link, useParams, useNavigate } from 'react-router';
-import { Brain, ArrowLeft, Calendar, Briefcase, MapPin, DollarSign, Play, Building2, FileText, CheckSquare } from 'lucide-react';
-import { mockInterviews, prepQuestions } from '../lib/mockData';
-import { useState } from 'react';
+import { Brain, ArrowLeft, Calendar, Briefcase, MapPin, DollarSign, Play, Building2, FileText, CheckSquare, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
 
 type TopicCategory = 'technical' | 'behavioral' | 'leetcode';
+
+interface JobDetail {
+  id: number;
+  title: string;
+  company: string;
+  description: string;
+  requirements: string[];
+  benefits: string[];
+  status: string;
+  location: string | null;
+  salary: string | null;
+  created_at: string;
+}
+
+interface PrepMaterials {
+  technical_topics: string[];
+  behavioral_topics: string[];
+  leetcode_topics: string[];
+}
 
 export function InterviewDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const interview = mockInterviews.find((i) => i.id === id);
   const [selectedCategory, setSelectedCategory] = useState<TopicCategory>('technical');
+  const [job, setJob] = useState<JobDetail | null>(null);
+  const [prepMaterials, setPrepMaterials] = useState<PrepMaterials | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingPrep, setLoadingPrep] = useState(false);
 
-  if (!interview) {
+  useEffect(() => {
+    const fetchJob = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          navigate('/login');
+          return;
+        }
+
+        // Fetch Job Details
+        const jobRes = await fetch(`http://localhost:8000/api/jobs/${id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!jobRes.ok) throw new Error('Job not found');
+        const jobData = await jobRes.json();
+        setJob(jobData);
+
+        // Fetch Prep Materials (async, don't block UI)
+        setLoadingPrep(true);
+        fetch('http://localhost:8000/api/prep/materials', {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ job_id: jobData.id })
+        })
+        .then(res => res.json())
+        .then(data => setPrepMaterials(data))
+        .catch(err => console.error('Failed to load prep materials', err))
+        .finally(() => setLoadingPrep(false));
+
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (id) fetchJob();
+  }, [id, navigate]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#f6f8fa] flex items-center justify-center">
+        <Loader2 className="size-8 text-[#0969da] animate-spin" />
+      </div>
+    );
+  }
+
+  if (!job) {
     return (
       <div className="min-h-screen bg-[#f6f8fa] flex items-center justify-center">
         <div className="text-center">
@@ -36,13 +108,14 @@ export function InterviewDetail() {
   };
 
   const getCurrentTopics = () => {
+    if (!prepMaterials) return [];
     switch (selectedCategory) {
       case 'technical':
-        return interview.technicalTopics || [];
+        return prepMaterials.technical_topics || [];
       case 'behavioral':
-        return interview.behavioralTopics || [];
+        return prepMaterials.behavioral_topics || [];
       case 'leetcode':
-        return interview.leetcodeTopics || [];
+        return prepMaterials.leetcode_topics || [];
       default:
         return [];
     }
@@ -78,18 +151,18 @@ export function InterviewDetail() {
           <div className="flex items-start justify-between mb-6">
             <div>
               <h1 className="text-3xl font-bold text-[#1f2328] mb-2">
-                {interview.position}
+                {job.title}
               </h1>
-              <p className="text-xl text-[#656d76]">{interview.company}</p>
+              <p className="text-xl text-[#656d76]">{job.company}</p>
             </div>
             <span
               className={`px-4 py-2 rounded-md text-sm font-medium border ${
-                interview.completed
+                job.status === 'Offer' || job.status === 'Rejected'
                   ? 'bg-[#dafbe1] text-[#1a7f37] border-[#1a7f37]/30'
                   : 'bg-[#fff8c5] text-[#9a6700] border-[#9a6700]/30'
               }`}
             >
-              {interview.completed ? 'Completed' : 'Upcoming'}
+              {job.status}
             </span>
           </div>
 
@@ -97,9 +170,9 @@ export function InterviewDetail() {
             <div className="flex items-center gap-3">
               <Calendar className="size-5 text-[#656d76]" />
               <div>
-                <p className="text-sm text-[#656d76]">Interview Date</p>
+                <p className="text-sm text-[#656d76]">Applied Date</p>
                 <p className="font-medium text-[#1f2328]">
-                  {formatDate(interview.date)}
+                  {formatDate(job.created_at)}
                 </p>
               </div>
             </div>
@@ -108,7 +181,7 @@ export function InterviewDetail() {
               <div>
                 <p className="text-sm text-[#656d76]">Interview Type</p>
                 <p className="font-medium text-[#1f2328] capitalize">
-                  {interview.type}
+                  Technical & Behavioral
                 </p>
               </div>
             </div>
@@ -116,27 +189,25 @@ export function InterviewDetail() {
               <MapPin className="size-5 text-[#656d76]" />
               <div>
                 <p className="text-sm text-[#656d76]">Location</p>
-                <p className="font-medium text-[#1f2328]">Remote</p>
+                <p className="font-medium text-[#1f2328]">{job.location || 'Not specified'}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <DollarSign className="size-5 text-[#656d76]" />
               <div>
                 <p className="text-sm text-[#656d76]">Salary Range</p>
-                <p className="font-medium text-[#1f2328]">$120k - $180k</p>
+                <p className="font-medium text-[#1f2328]">{job.salary || 'Not specified'}</p>
               </div>
             </div>
           </div>
 
-          {!interview.completed && (
-            <button
-              onClick={() => navigate(`/simulate/${interview.id}`)}
-              className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-medium transition-colors"
-            >
-              <Play className="size-5" />
-              Start AI Mock Interview
-            </button>
-          )}
+          <button
+            onClick={() => navigate(`/simulate/${job.id}`)}
+            className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-medium transition-colors"
+          >
+            <Play className="size-5" />
+            Start AI Mock Interview
+          </button>
         </div>
 
         {/* Job Listing Summary */}
@@ -146,25 +217,25 @@ export function InterviewDetail() {
           </h2>
 
           {/* Description */}
-          {interview.description && (
+          {job.description && (
             <div className="bg-white border border-[#d0d7de] rounded-lg p-6">
               <div className="flex items-center gap-2 mb-4">
                 <FileText className="size-5 text-[#0969da]" />
                 <h3 className="text-xl font-semibold text-[#1f2328]">Description</h3>
               </div>
-              <p className="text-[#1f2328] leading-relaxed">{interview.description}</p>
+              <p className="text-[#1f2328] leading-relaxed whitespace-pre-wrap">{job.description}</p>
             </div>
           )}
 
-          {/* Responsibilities */}
-          {interview.responsibilities && interview.responsibilities.length > 0 && (
+          {/* Benefits/Values (Mapped from benefits) */}
+          {job.benefits && job.benefits.length > 0 && (
             <div className="bg-white border border-[#d0d7de] rounded-lg p-6">
               <div className="flex items-center gap-2 mb-4">
                 <CheckSquare className="size-5 text-[#0969da]" />
-                <h3 className="text-xl font-semibold text-[#1f2328]">Key Responsibilities</h3>
+                <h3 className="text-xl font-semibold text-[#1f2328]">Benefits & Values</h3>
               </div>
               <ul className="space-y-3">
-                {interview.responsibilities.map((responsibility, index) => (
+                {job.benefits.map((responsibility, index) => (
                   <li key={index} className="flex items-start gap-3">
                     <span className="text-[#0969da] mt-1">•</span>
                     <span className="text-[#1f2328]">{responsibility}</span>
@@ -175,14 +246,14 @@ export function InterviewDetail() {
           )}
 
           {/* Requirements */}
-          {interview.requirements && interview.requirements.length > 0 && (
+          {job.requirements && job.requirements.length > 0 && (
             <div className="bg-white border border-[#d0d7de] rounded-lg p-6">
               <div className="flex items-center gap-2 mb-4">
                 <Building2 className="size-5 text-[#0969da]" />
                 <h3 className="text-xl font-semibold text-[#1f2328]">Requirements</h3>
               </div>
               <ul className="space-y-3">
-                {interview.requirements.map((requirement, index) => (
+                {job.requirements.map((requirement, index) => (
                   <li key={index} className="flex items-start gap-3">
                     <span className="text-[#0969da] mt-1">•</span>
                     <span className="text-[#1f2328]">{requirement}</span>
@@ -240,7 +311,11 @@ export function InterviewDetail() {
               {selectedCategory === 'behavioral' && 'Common behavioral questions and scenarios to prepare:'}
               {selectedCategory === 'leetcode' && 'Algorithm and data structure topics to practice on LeetCode:'}
             </p>
-            {currentTopics.length > 0 ? (
+            {loadingPrep ? (
+              <div className="flex items-center justify-center py-8 text-[#0969da]">
+                <Loader2 className="size-6 animate-spin mr-2" /> Generating personalized study plan...
+              </div>
+            ) : currentTopics.length > 0 ? (
               <div className="grid gap-3">
                 {currentTopics.map((topic, index) => (
                   <div

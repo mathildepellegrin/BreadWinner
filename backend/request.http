@@ -1,0 +1,22 @@
+GET http://localhost:8000/api/jobs/1
+Authorization: Bearer 43cd8c63-3eea-4815-a854-793ce87e26c7
+###
+POST http://localhost:8000/api/jobs/auto-fill
+Content-Type: application/json
+Authorization: Bearer 43cd8c63-3eea-4815-a854-793ce87e26c7
+{
+  "job_description": "We are looking for a skilled software engineer to join our dynamic team. The ideal candidate will have experience with full-stack development, strong problem-solving skills, and a passion for building scalable applications. Responsibilities include designing, developing, and maintaining web applications, collaborating with cross-functional teams, and ensuring code quality through testing and reviews. Proficiency in JavaScript, Python, and cloud technologies is a plus."
+}
+###
+
+POST http://localhost:8080/api/v1/auth/login
+Content-Type: application/json
+{
+  "email": "sajad@gmail.com",
+  "password": "sajad"
+}
+###
+
+GET http://localhost:8000/api/jobs/{1}
+Authorization: Bearer 43cd8c63-3eea-4815-a854-793ce87e26c7
+###
