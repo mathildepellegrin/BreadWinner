@@ -7,13 +7,12 @@ from fastapi import FastAPI, HTTPException, Body, Depends, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, validator
+import google.generativeai as genai
+from functools import lru_cache
 import logging
 from sqlalchemy.orm import Session
-from openai import OpenAI
-
-# Internal module imports
 from database import SessionLocal, engine, get_db
-import models
+from models import Base, User, Resume, JobApplication, InterviewSession
 import crud
 
 # Configure logging
@@ -21,27 +20,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create database tables
-models.Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 # --- Configuration ---
 class Settings:
-    OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
-    ALLOWED_ORIGINS: List[str] = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
-    MODEL_NAME: str = "google/gemini-2.0-flash-001"
+    GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+    ALLOWED_ORIGINS: List[str] = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    MODEL_NAME: str = "gemini-1.5-flash"
     MAX_TEXT_LENGTH: int = 50000
-    JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
+    JWT_SECRET: str = os.environ.get("JWT_SECRET", "your-secret-key-change-in-production")
 
 settings = Settings()
 
-# --- Initialize OpenRouter Client ---
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=settings.OPENROUTER_API_KEY,
-    default_headers={
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "BreadWinner AI",
-    }
-)
+# Initialize Gemini
+if not settings.GEMINI_API_KEY:
+    logger.error("GEMINI_API_KEY not found in environment variables!")
+else:
+    genai.configure(api_key=settings.GEMINI_API_KEY)
 
 # --- Pydantic Models ---
 class LoginRequest(BaseModel):
@@ -75,20 +70,26 @@ class InterviewReportRequest(BaseModel):
     history: List[Dict[str, str]]
     jd: Dict[str, Any]
 
+class JobStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(Applied|Interviewing|Rejected|Offer)$")
+
 class PrepMaterialsRequest(BaseModel):
-    profile: Dict[str, Any]
-    jd: Dict[str, Any]
+    job_id: int
 
 # --- Security ---
 security = HTTPBearer()
-valid_tokens = {} 
+
+# Simple token store (in production, use Redis or a database)
+valid_tokens = {}  # token -> user_id mapping
 
 def create_token(user_id: int) -> str:
+    """Create a simple bearer token (in production, use JWT)"""
     token = str(uuid.uuid4())
     valid_tokens[token] = user_id
     return token
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
+    """Verify bearer token and return user_id"""
     token = credentials.credentials
     if token not in valid_tokens:
         raise HTTPException(
@@ -97,7 +98,8 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Security(secu
         )
     return valid_tokens[token]
 
-async def get_current_user(user_id: int = Depends(verify_token), db: Session = Depends(get_db)) -> models.User:
+async def get_current_user(user_id: int = Depends(verify_token), db: Session = Depends(get_db)) -> User:
+    """Get current authenticated user"""
     user = crud.get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -105,170 +107,404 @@ async def get_current_user(user_id: int = Depends(verify_token), db: Session = D
 
 # --- FastAPI App ---
 app = FastAPI(
-    title="BreadWinner AI - Secure Backend",
+    title="HireSync AI - Secure Backend",
     description="AI-powered interview preparation and resume optimization",
-    version="2.1.0"
+    version="2.0.0"
 )
 
+# CORS - restricted to specific origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
-# --- Helper Function ---
-async def safe_generate_json(prompt: str, max_retries: int = 2) -> Dict[str, Any]:
-    """Safely generate JSON via OpenRouter with retries"""
+# --- Helper Functions ---
+@lru_cache()
+def get_model(name: str = settings.MODEL_NAME):
+    """Get Gemini model with caching"""
+    try:
+        return genai.GenerativeModel(name)
+    except Exception as e:
+        logger.error(f"Failed to initialize model: {e}")
+        raise HTTPException(status_code=500, detail="AI service unavailable")
+
+async def safe_generate_json(model, prompt: str, max_retries: int = 2) -> Dict[str, Any]:
+    """Safely generate JSON with retries and validation"""
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model=settings.MODEL_NAME,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={ "type": "json_object" }
+            response = model.generate_content(
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
             )
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            logger.error(f"AI generation failed (attempt {attempt + 1}): {e}")
+            
+            # Clean and parse response
+            text = response.text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.endswith("```"):
+                text = text[:-3]
+            
+            return json.loads(text.strip())
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse failed (attempt {attempt + 1}): {e}")
             if attempt == max_retries - 1:
-                raise HTTPException(status_code=500, detail="AI service error")
+                raise HTTPException(status_code=500, detail="Failed to parse AI response")
+        except Exception as e:
+            logger.error(f"AI generation failed: {e}")
+            raise HTTPException(status_code=500, detail="AI service error")
 
 # --- Public Routes ---
 @app.get("/api/health")
 async def health():
+    """Health check endpoint"""
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "model": settings.MODEL_NAME,
-        "api_key_configured": bool(settings.OPENROUTER_API_KEY)
+        "api_key_configured": bool(settings.GEMINI_API_KEY)
     }
 
 @app.post("/api/auth/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Login endpoint - creates user if doesn't exist
+    """
     user = crud.get_user_by_email(db, request.email)
     if not user:
+        # Create new user
         name = request.email.split('@')[0].capitalize()
         user = crud.create_user(db, request.email, name, request.password)
+    
     token = create_token(user.id)
-    return {"id": user.id, "email": user.email, "name": user.name, "token": token}
-
-# --- Company Questions Cache ---
-@app.get("/api/prep/company/{company_name}")
-async def get_company_prep(company_name: str, db: Session = Depends(get_db), token: str = Depends(verify_token)):
-    """Check cache for company questions; generate via AI if not found."""
-    company = crud.get_company_by_name(db, company_name)
     
-    if company:
-        logger.info(f"Cache Hit for {company_name}")
-        return {"company": company.name, "questions": company.questions}
-
-    logger.info(f"Cache Miss for {company_name}. Generating new questions...")
-    prompt = f"""
-    Generate 15 interview questions for {company_name}. 
-    Categories: 5 'leetcode', 5 'technical', 5 'behavioral'.
-    For 'leetcode', include 'leetcode_slug' (e.g., 'two-sum').
-    Return JSON: {{ "questions": [ {{ "category": "leetcode", "title": "Two Sum", "text": "Given an array...", "leetcode_slug": "two-sum", "ideal_answer": "Use hashmap..." }} ] }}
-    """
-    ai_data = await safe_generate_json(prompt)
-    
-    new_company = crud.create_company(db, company_name.capitalize())
-    
-    for q in ai_data.get('questions', []):
-        crud.create_question(
-            db, new_company.id,
-            q['category'],
-            q['title'], 
-            q['text'],
-            q['ideal_answer'],
-            q.get('leetcode_slug')
-        )
-    
-    db.refresh(new_company)
-    return {"company": new_company.name, "questions": new_company.questions}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "token": token
+    }
 
 # --- Protected Routes ---
 @app.post("/api/profile/parse")
-async def parse_resume(request: ResumeParseRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"Parse the following resume text into a structured JSON format: {request.text}"
-    parsed_data = await safe_generate_json(prompt)
-    resume = crud.create_resume(db, current_user.id, f"Resume_{datetime.now().strftime('%Y%m%d')}", parsed_data, request.text)
-    return {"id": resume.id, "data": parsed_data}
-
-@app.post("/api/jobs/ingest")
-async def ingest_job(request: JobIngestRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"""Extract job information from the following and return JSON with exact fields:
+async def parse_resume(
+    request: ResumeParseRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Parse resume text into structured JSON format"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    model = get_model()
+    prompt = f"""
+    Parse the following resume text into a structured JSON format with these exact fields:
     {{
-        "title": "Job Title",
-        "company": "Company Name", 
-        "description": "Job description",
-        "requirements": ["req1", "req2"],
-        "benefits": ["benefit1", "benefit2"]
+        "name": "Full Name",
+        "email": "email@example.com",
+        "phone": "phone number",
+        "summary": "professional summary",
+        "experience": [
+            {{"title": "Job Title", "company": "Company", "duration": "dates", "description": "what they did"}}
+        ],
+        "education": [
+            {{"degree": "Degree", "institution": "School", "year": "Year"}}
+        ],
+        "projects": [
+            {{"name": "Project Name", "description": "what it does", "technologies": ["tech1", "tech2"]}}
+        ],
+        "skills": ["skill1", "skill2", "skill3"]
     }}
     
-    Source: {request.url or request.description}"""
+    Resume text:
+    {request.text}
+    """
     
-    job_data = await safe_generate_json(prompt)
+    parsed_data = await safe_generate_json(model, prompt)
     
-    job_app = crud.create_job_application(
-        db, current_user.id,
-        job_data.get("title", "Position"),
-        job_data.get("company", "Company"),
-        job_data.get("description", ""),
-        job_data.get("requirements", []),
-        job_data.get("benefits", []),
-        request.url
-    )
+    # Save resume to database
+    resume_name = f"Resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    resume = crud.create_resume(db, current_user.id, resume_name, parsed_data, request.text)
     
     return {
-        "id": job_app.id,
-        "title": job_app.title,
-        "company": job_app.company,
-        "description": job_app.description,
-        "requirements": job_app.requirements,
-        "benefits": job_app.benefits,
-        "url": job_app.url,
-        "created_at": job_app.created_at
+        "id": resume.id,
+        "name": resume.name,
+        "data": parsed_data,
+        "created_at": resume.created_at
     }
 
-@app.post("/api/resume/tailor")
-async def tailor_resume(request: TailorResumeRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"""Tailor this resume for this job description. Return JSON with:
-    {{
-        "tailored_resume": {{resume object with optimized content}},
-        "cover_letter": "professional cover letter text",
-        "match_score": 85,
-        "recommendations": ["rec1", "rec2"]
-    }}
+@app.post("/api/jobs/ingest")
+async def ingest_job(
+    request: JobIngestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Ingest job description and save to database"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
     
-    Resume: {json.dumps(request.resume)}
-    Job: {json.dumps(request.jd)}"""
-    return await safe_generate_json(prompt)
+    model = get_model()
+    
+    if request.url:
+        prompt = f"""
+        Extract job information from the following URL context.
+        Return JSON with: title, company, description, requirements (array), benefits (array).
+        
+        URL: {request.url}
+        """
+    else:
+        prompt = f"""
+        Extract job information from the following text.
+        Return JSON with: title, company, description, requirements (array), benefits (array).
+        
+        Job Description:
+        {request.description}
+        """
+    
+    try:
+        job_data = await safe_generate_json(model, prompt)
+        
+        # Save to database
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title=job_data.get("title", "Position"),
+            company=job_data.get("company", "Company"),
+            description=job_data.get("description", request.description or ""),
+            requirements=job_data.get("requirements", []),
+            benefits=job_data.get("benefits", []),
+            url=request.url
+        )
+        
+        return {
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "url": job_app.url
+        }
+    except Exception as e:
+        logger.error(f"Job ingestion failed: {e}")
+        # Fallback manual creation
+        job_app = crud.create_job_application(
+            db=db,
+            user_id=current_user.id,
+            title="New Position",
+            company="Company",
+            description=request.description or "",
+            url=request.url
+        )
+        return {
+            "id": job_app.id,
+            "title": job_app.title,
+            "company": job_app.company,
+            "status": job_app.status,
+            "url": job_app.url,
+            "warning": "Partial processing"
+        }
+
+@app.patch("/api/jobs/{job_id}/status")
+async def update_job_status(
+    job_id: int,
+    request: JobStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the status of a job application"""
+    job = db.query(JobApplication).filter(JobApplication.id == job_id, JobApplication.user_id == current_user.id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.status = request.status
+    db.commit()
+    db.refresh(job)
+    return {"status": job.status}
+
+@app.get("/api/jobs/{job_id}/analysis")
+async def get_job_analysis(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get gap analysis and match score for a job"""
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if not job.gaps or not job.match_score:
+        # Generate analysis if not present
+        resume = crud.get_active_resume(db, current_user.id)
+        if not resume:
+            raise HTTPException(status_code=400, detail="Active resume required for analysis")
+            
+        model = get_model()
+        prompt = f"""
+        Perform a gap analysis between this resume and job description.
+        Resume: {json.dumps(resume.content)}
+        Job: {job.description}
+        
+        Return JSON:
+        {{
+            "matchScore": 0-100,
+            "gaps": ["missing skill 1", "missing skill 2"],
+            "strengths": ["matched skill 1"]
+        }}
+        """
+        analysis = await safe_generate_json(model, prompt)
+        job.match_score = analysis.get("matchScore")
+        job.gaps = analysis.get("gaps")
+        db.commit()
+        db.refresh(job)
+        return analysis
+        
+    return {
+        "matchScore": job.match_score,
+        "gaps": job.gaps
+    }
 
 @app.post("/api/interviews/question")
-async def get_question(request: InterviewQuestionRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Mock interview question generator"""
-    prompt = f"""You are an interviewer for {request.mode} interview. 
-    Based on conversation history {json.dumps(request.history[-3:])}, 
-    provide feedback on last answer (if any) and ask one new question.
-    Return JSON: {{"feedback": "feedback text or empty", "question": "your question"}}
+async def get_question(
+    request: InterviewQuestionRequest,
+    token: str = Depends(verify_token)
+):
+    """Generate interview question with feedback"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
     
-    Profile: {json.dumps(request.profile)}
-    Job: {json.dumps(request.jd)}"""
-    return await safe_generate_json(prompt)
+    model = get_model()
+    prompt = f"""
+    You are an expert {request.mode} interviewer for: {request.jd.get('title', 'Position')} at {request.jd.get('company', 'Company')}.
+    
+    Candidate Profile Summary:
+    {json.dumps(request.profile, indent=2)[:1000]}
+    
+    Interview Mode: {request.mode}
+    
+    Conversation History:
+    {json.dumps(request.history[-5:], indent=2)}
+    
+    Tasks:
+    1. If there was a previous answer, provide constructive feedback (2-3 sentences)
+    2. Ask ONE new {request.mode} question appropriate for the role
+    3. Make the question challenging but fair
+    
+    Return JSON:
+    {{
+        "feedbackForLastAnswer": "feedback text or empty string if first question",
+        "question": "your interview question"
+    }}
+    """
+    
+    return await safe_generate_json(model, prompt)
 
 @app.post("/api/interviews/report")
-async def get_report(request: InterviewReportRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prompt = f"Generate a comprehensive interview performance report based on this conversation: {json.dumps(request.history)}"
-    response = client.chat.completions.create(
-        model=settings.MODEL_NAME, 
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return {"report": response.choices[0].message.content}
+async def get_report(
+    request: InterviewReportRequest,
+    token: str = Depends(verify_token)
+):
+    """Generate comprehensive interview feedback report"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    model = get_model()
+    prompt = f"""
+    Generate a detailed interview performance report.
+    
+    Role: {request.jd.get('title', 'Position')} at {request.jd.get('company', 'Company')}
+    
+    Interview Transcript:
+    {json.dumps(request.history, indent=2)}
+    
+    Provide:
+    1. Overall performance rating (1-10)
+    2. Strengths demonstrated
+    3. Areas for improvement
+    4. Specific examples from the interview
+    5. Actionable recommendations
+    
+    Format as markdown.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return {"report": response.text}
+    except Exception as e:
+        logger.error(f"Report generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate report")
 
-# --- Management Routes ---
+@app.post("/api/prep/materials")
+async def get_prep(
+    request: PrepMaterialsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate interview preparation materials (Study Lab)"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    job = crud.get_job_application(db, request.job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    resume = crud.get_active_resume(db, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=400, detail="Active resume required")
+
+    model = get_model()
+    prompt = f"""
+    Generate Study Lab materials for: {job.title} at {job.company}.
+    
+    Job Description: {job.description}
+    Candidate Resume: {json.dumps(resume.content)}
+    
+    Return JSON with:
+    {{
+        "leetcodeRoadmap": [
+            {{"title": "Two Sum", "difficulty": "Easy", "link": "https://leetcode.com/problems/two-sum/", "relevance": "Top IBM Question"}}
+        ],
+        "cheatSheets": [
+            {{"topic": "Spring Boot", "tips": ["Tip 1", "Tip 2"]}}
+        ]
+    }}
+    """
+    
+    return await safe_generate_json(model, prompt)
+
+# --- Error Handlers ---
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return {
+        "error": exc.detail,
+        "status_code": exc.status_code
+    }
+
+# --- New Database Management Endpoints ---
+@app.get("/api/dashboard/stats")
+async def dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get dashboard overview statistics"""
+    jobs_count = db.query(JobApplication).filter(JobApplication.user_id == current_user.id).count()
+    interviews_count = db.query(InterviewSession).filter(InterviewSession.user_id == current_user.id).count()
+    # Assuming success rate is based on "Offer" status
+    offers_count = db.query(JobApplication).filter(JobApplication.user_id == current_user.id, JobApplication.status == "Offer").count()
+    success_rate = (offers_count / jobs_count * 100) if jobs_count > 0 else 0
+    
+    return {
+        "jobsTracked": jobs_count,
+        "interviewsPrepped": interviews_count,
+        "successRate": round(success_rate, 1)
+    }
+
 @app.get("/api/profile/resumes")
-async def get_resumes(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_resumes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's resumes"""
     resumes = crud.get_user_resumes(db, current_user.id)
     return [
         {
@@ -281,13 +517,19 @@ async def get_resumes(current_user: models.User = Depends(get_current_user), db:
     ]
 
 @app.get("/api/jobs")
-async def get_job_applications(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_job_applications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's job applications"""
     jobs = crud.get_user_job_applications(db, current_user.id)
     return [
         {
             "id": job.id,
             "title": job.title,
             "company": job.company,
+            "status": job.status,
+            "matchScore": job.match_score,
             "url": job.url,
             "created_at": job.created_at
         }
@@ -295,7 +537,11 @@ async def get_job_applications(current_user: models.User = Depends(get_current_u
     ]
 
 @app.get("/api/interviews/history")
-async def get_interview_history(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_interview_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's interview history"""
     sessions = crud.get_user_interview_sessions(db, current_user.id)
     return [
         {
@@ -310,4 +556,4 @@ async def get_interview_history(current_user: models.User = Depends(get_current_
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
