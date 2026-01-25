@@ -42,7 +42,7 @@ services:
     build: ./frontend/interviewPrep
     container_name: interview_frontend
     ports:
-      - "5173:5173"
+      - "5173:3000"
     volumes:
       - ./frontend/interviewPrep:/app
       - /app/node_modules
