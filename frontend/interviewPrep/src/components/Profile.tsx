@@ -1,9 +1,13 @@
-import { Link } from 'react-router';
-import { Brain, ArrowLeft, User, Mail, Phone, MapPin, Briefcase, GraduationCap, Upload, FileText, CheckCircle } from 'lucide-react';
-import { FormEvent, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
+import { Brain, ArrowLeft, User, Mail, Phone, MapPin, Briefcase, GraduationCap, Upload, FileText, CheckCircle, Loader2, Lock, Unlock } from 'lucide-react';
+import { FormEvent, useState, useEffect } from 'react';
 
 export function Profile() {
+  const navigate = useNavigate();
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success'>('idle');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   
   // Personal Information
   const [fullName, setFullName] = useState('');
@@ -27,6 +31,45 @@ export function Profile() {
   
   // Certifications
   const [certifications, setCertifications] = useState('');
+
+  // Fetch profile data on mount
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          navigate('/login');
+          return;
+        }
+
+        const res = await fetch('http://localhost:8000/api/profile', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          setFullName(data.name || '');
+          setEmail(data.email || '');
+          setPhone(data.phone || '');
+          setLocation(data.location || '');
+          setLinkedIn(data.linkedin || '');
+          setPortfolio(data.portfolio || '');
+          setSummary(data.summary || '');
+          setWorkExperience(data.experience || '');
+          setEducation(data.education || '');
+          setSkills(data.skills || '');
+          setCertifications(data.certifications || '');
+        } else if (res.status === 401) {
+          navigate('/login');
+        }
+      } catch (error) {
+        console.error("Failed to fetch profile:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchProfile();
+  }, [navigate]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -72,11 +115,53 @@ Certified Kubernetes Administrator • 2021`);
     }, 2000);
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    // Mock save - in production, this would save to database
-    alert('Profile saved successfully!');
+    setIsSaving(true);
+    
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:8000/api/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: fullName,
+          email,
+          phone,
+          location,
+          linkedin: linkedIn,
+          portfolio,
+          summary,
+          experience: workExperience,
+          education,
+          skills,
+          certifications
+        })
+      });
+
+      if (res.ok) {
+        alert('Profile saved successfully!');
+      } else {
+        throw new Error('Failed to save profile');
+      }
+    } catch (error) {
+      console.error("Error saving profile:", error);
+      alert('Failed to save profile. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#f6f8fa] flex items-center justify-center">
+        <Loader2 className="size-8 text-[#0969da] animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f6f8fa]">
@@ -111,7 +196,7 @@ Certified Kubernetes Administrator • 2021`);
         </div>
 
         {/* CV Upload Section */}
-        <div className="bg-white border border-[#d0d7de] rounded-lg p-6 mb-6">
+        <div className={`bg-white border border-[#d0d7de] rounded-lg p-6 mb-6 ${!isEditing ? 'opacity-60 pointer-events-none' : ''}`}>
           <div className="flex items-center gap-2 mb-4">
             <Upload className="size-5 text-[#0969da]" />
             <h2 className="text-xl font-semibold text-[#1f2328]">Upload CV</h2>
@@ -125,6 +210,7 @@ Certified Kubernetes Administrator • 2021`);
               type="file"
               id="cv-upload"
               accept=".pdf,.doc,.docx"
+              disabled={!isEditing}
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -160,12 +246,35 @@ Certified Kubernetes Administrator • 2021`);
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Personal Information */}
           <div className="bg-white border border-[#d0d7de] rounded-lg p-6">
-            <div className="flex items-center gap-2 mb-6">
-              <User className="size-5 text-[#0969da]" />
-              <h2 className="text-xl font-semibold text-[#1f2328]">Personal Information</h2>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <User className="size-5 text-[#0969da]" />
+                <h2 className="text-xl font-semibold text-[#1f2328]">Personal Information</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditing(!isEditing)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all shadow-sm ${
+                  isEditing 
+                    ? 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50' 
+                    : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {isEditing ? (
+                  <>
+                    <Unlock className="size-4" />
+                    <span>Editing Enabled</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="size-4" />
+                    <span>Enable Editing</span>
+                  </>
+                )}
+              </button>
             </div>
             
-            <div className="grid md:grid-cols-2 gap-6">
+            <div className={`grid md:grid-cols-2 gap-6 transition-opacity duration-200 ${!isEditing ? 'opacity-60' : ''}`}>
               <div>
                 <label htmlFor="fullName" className="block text-sm font-medium text-[#1f2328] mb-2">
                   Full Name *
@@ -176,8 +285,9 @@ Certified Kubernetes Administrator • 2021`);
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   required
-                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent disabled:opacity-70 disabled:cursor-not-allowed"
                   placeholder="John Doe"
+                  disabled={!isEditing}
                 />
               </div>
 
@@ -191,8 +301,9 @@ Certified Kubernetes Administrator • 2021`);
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent disabled:opacity-70 disabled:cursor-not-allowed"
                   placeholder="john@example.com"
+                  disabled={!isEditing}
                 />
               </div>
 
@@ -205,8 +316,9 @@ Certified Kubernetes Administrator • 2021`);
                   id="phone"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent disabled:opacity-70 disabled:cursor-not-allowed"
                   placeholder="+1 (555) 123-4567"
+                  disabled={!isEditing}
                 />
               </div>
 
@@ -219,8 +331,9 @@ Certified Kubernetes Administrator • 2021`);
                   id="location"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent disabled:opacity-70 disabled:cursor-not-allowed"
                   placeholder="San Francisco, CA"
+                  disabled={!isEditing}
                 />
               </div>
 
@@ -233,8 +346,9 @@ Certified Kubernetes Administrator • 2021`);
                   id="linkedIn"
                   value={linkedIn}
                   onChange={(e) => setLinkedIn(e.target.value)}
-                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent disabled:opacity-70 disabled:cursor-not-allowed"
                   placeholder="linkedin.com/in/yourprofile"
+                  disabled={!isEditing}
                 />
               </div>
 
@@ -247,8 +361,9 @@ Certified Kubernetes Administrator • 2021`);
                   id="portfolio"
                   value={portfolio}
                   onChange={(e) => setPortfolio(e.target.value)}
-                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent"
+                  className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent disabled:opacity-70 disabled:cursor-not-allowed"
                   placeholder="yourwebsite.com"
+                  disabled={!isEditing}
                 />
               </div>
             </div>
@@ -270,8 +385,9 @@ Certified Kubernetes Administrator • 2021`);
                 value={summary}
                 onChange={(e) => setSummary(e.target.value)}
                 rows={4}
-                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none"
+                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none disabled:opacity-70 disabled:cursor-not-allowed"
                 placeholder="Write a brief professional summary highlighting your experience and expertise..."
+                disabled={!isEditing}
               />
             </div>
           </div>
@@ -292,13 +408,14 @@ Certified Kubernetes Administrator • 2021`);
                 value={workExperience}
                 onChange={(e) => setWorkExperience(e.target.value)}
                 rows={8}
-                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none font-mono text-sm"
+                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none font-mono text-sm disabled:opacity-70 disabled:cursor-not-allowed"
                 placeholder="Job Title • Company Name • Start Date - End Date
 • Key achievement or responsibility
 • Key achievement or responsibility
 
 Job Title • Company Name • Start Date - End Date
 • Key achievement or responsibility"
+                disabled={!isEditing}
               />
             </div>
           </div>
@@ -319,10 +436,11 @@ Job Title • Company Name • Start Date - End Date
                 value={education}
                 onChange={(e) => setEducation(e.target.value)}
                 rows={5}
-                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none"
+                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none disabled:opacity-70 disabled:cursor-not-allowed"
                 placeholder="Degree in Major
 University Name • Graduation Year
 GPA: X.X/4.0"
+                disabled={!isEditing}
               />
             </div>
           </div>
@@ -343,8 +461,9 @@ GPA: X.X/4.0"
                 value={skills}
                 onChange={(e) => setSkills(e.target.value)}
                 rows={3}
-                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none"
+                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none disabled:opacity-70 disabled:cursor-not-allowed"
                 placeholder="JavaScript, React, Node.js, Python, AWS, Docker, etc."
+                disabled={!isEditing}
               />
             </div>
           </div>
@@ -365,9 +484,10 @@ GPA: X.X/4.0"
                 value={certifications}
                 onChange={(e) => setCertifications(e.target.value)}
                 rows={4}
-                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none"
+                className="w-full px-4 py-2 bg-[#f6f8fa] border border-[#d0d7de] rounded-md text-[#1f2328] placeholder-[#656d76] focus:outline-none focus:ring-2 focus:ring-[#0969da] focus:border-transparent resize-none disabled:opacity-70 disabled:cursor-not-allowed"
                 placeholder="Certification Name • Year
 Certification Name • Year"
+                disabled={!isEditing}
               />
             </div>
           </div>
@@ -376,9 +496,10 @@ Certification Name • Year"
           <div className="flex gap-4">
             <button
               type="submit"
-              className="flex-1 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-semibold transition-colors"
+              disabled={!isEditing || isSaving}
+              className="flex-1 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-semibold transition-colors disabled:opacity-50"
             >
-              Save Profile
+              {isSaving ? 'Saving...' : 'Save Profile'}
             </button>
             <Link
               to="/dashboard"

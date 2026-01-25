@@ -1,6 +1,5 @@
 import { Link, useParams } from 'react-router';
-import { Brain, ArrowLeft, Mic, MicOff, Video, VideoOff, Phone } from 'lucide-react';
-import { mockInterviews } from '../lib/mockData';
+import { Brain, ArrowLeft, Loader2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import InterviewRoom from './InterviewRoom';
 
@@ -8,7 +7,6 @@ type InterviewType = 'technical' | 'behavioral' | 'leetcode';
 
 export function AISimulation() {
   const { id } = useParams();
-  const interview = mockInterviews.find((i) => i.id === id);
   const [hasStarted, setHasStarted] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<InterviewType[]>(['technical']);
   const [isRecording, setIsRecording] = useState(false);
@@ -16,6 +14,38 @@ export function AISimulation() {
   const [isListening, setIsListening] = useState(false);
   const [interviewDuration, setInterviewDuration] = useState(0);
   const [sessionId, setSessionId] = useState<number | null>(null);
+  
+  // New state for real job data
+  const [job, setJob] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch real job details
+  useEffect(() => {
+    const fetchJob = async () => {
+      if (!id) {
+        setLoading(false);
+        return;
+      }
+      
+      try {
+        const token = localStorage.getItem('token');
+        const res = await fetch(`http://localhost:8000/api/jobs/${id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          setJob(data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch job details:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchJob();
+  }, [id]);
 
   useEffect(() => {
     if (hasStarted) {
@@ -41,7 +71,15 @@ export function AISimulation() {
     }
   }, [hasStarted]);
 
-  if (!interview) {
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#0d1117] flex items-center justify-center">
+        <Loader2 className="size-8 text-[#58a6ff] animate-spin" />
+      </div>
+    );
+  }
+
+  if (!job && id) {
     return (
       <div className="min-h-screen bg-[#0d1117] flex items-center justify-center">
         <div className="text-center">
@@ -75,7 +113,7 @@ export function AISimulation() {
         },
         body: JSON.stringify({
           mode: selectedTypes[0], // Using first selected type for now
-          job_id: null // Or map to real job ID if available
+          job_id: id ? parseInt(id) : null
         })
       });
       const data = await res.json();
@@ -140,7 +178,7 @@ export function AISimulation() {
           <div className="max-w-3xl mx-auto">
             <div className="text-center mb-12">
               <h1 className="text-3xl font-bold text-white mb-4">
-                {interview.company} - {interview.position}
+                {job ? job.company : 'General Practice'} - {job ? job.title : 'Mock Interview'}
               </h1>
               <p className="text-gray-400 text-lg">
                 Choose your interview type(s) and get ready to practice

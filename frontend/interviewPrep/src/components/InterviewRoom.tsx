@@ -19,6 +19,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const videoRef = useRef<HTMLVideoElement>(null);
   const userVideoRef = useRef<HTMLVideoElement>(null);
   const recognitionRef = useRef<any>(null);
+  const userStreamRef = useRef<MediaStream | null>(null);
 
   // Configuration - Use default avatar (empty string) which works
   const DEFAULT_AVATAR = "Wayne_20240711";
@@ -35,6 +36,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const initUserCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      userStreamRef.current = stream;
       if (userVideoRef.current) {
         userVideoRef.current.srcObject = stream;
       }
@@ -192,6 +194,12 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     if (avatarRef.current) {
       await avatarRef.current.stopAvatar();
       avatarRef.current = null;
+    }
+
+    // Stop user camera tracks immediately
+    if (userStreamRef.current) {
+      userStreamRef.current.getTracks().forEach(track => track.stop());
+      userStreamRef.current = null;
     }
     
     // Mark session as completed in backend

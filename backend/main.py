@@ -50,6 +50,28 @@ def run_migrations():
                 logger.info("Migration: Removing NOT NULL constraint from conversation_history")
                 conn.execute(text("ALTER TABLE interview_sessions ALTER COLUMN conversation_history DROP NOT NULL"))
                 conn.commit()
+            
+            # Check for 'job_application_id' column
+            result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='interview_sessions' AND column_name='job_application_id'"))
+            if not result.fetchone():
+                logger.info("Migration: Adding 'job_application_id' column to interview_sessions")
+                conn.execute(text("ALTER TABLE interview_sessions ADD COLUMN job_application_id INTEGER REFERENCES job_applications(id)"))
+                conn.commit()
+            
+            # Check for 'phone' column in 'users' (Profile Migration)
+            result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='phone'"))
+            if not result.fetchone():
+                logger.info("Migration: Adding profile columns to users")
+                conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(50)"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN location VARCHAR(100)"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN linkedin VARCHAR(255)"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN portfolio VARCHAR(255)"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN summary TEXT"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN experience TEXT"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN education TEXT"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN skills TEXT"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN certifications TEXT"))
+                conn.commit()
     except Exception as e:
         logger.error(f"Migration failed: {e}")
 
@@ -148,6 +170,19 @@ class InterviewSessionCreateRequest(BaseModel):
     job_id: Optional[int] = None
     mode: str = "technical"
 
+class UserProfileUpdate(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    linkedin: Optional[str] = None
+    portfolio: Optional[str] = None
+    summary: Optional[str] = None
+    experience: Optional[str] = None
+    education: Optional[str] = None
+    skills: Optional[str] = None
+    certifications: Optional[str] = None
+
 # --- Security ---
 security = HTTPBearer()
 
@@ -189,7 +224,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -278,6 +313,67 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         "name": user.name,
         "token": token
     }
+
+@app.get("/api/profile")
+async def get_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get current user's full profile"""
+    # Raw SQL to get all columns including new ones not in ORM
+    result = db.execute(
+        text("SELECT id, email, name, phone, location, linkedin, portfolio, summary, experience, education, skills, certifications FROM users WHERE id = :uid"),
+        {"uid": current_user.id}
+    ).fetchone()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    return {
+        "id": result.id,
+        "email": result.email,
+        "name": result.name,
+        "phone": result.phone,
+        "location": result.location,
+        "linkedin": result.linkedin,
+        "portfolio": result.portfolio,
+        "summary": result.summary,
+        "experience": result.experience,
+        "education": result.education,
+        "skills": result.skills,
+        "certifications": result.certifications
+    }
+
+@app.put("/api/profile")
+async def update_profile(
+    profile: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update user profile details"""
+    # Update using raw SQL
+    query = text("""
+        UPDATE users 
+        SET name=:name, email=:email, phone=:phone, location=:location, 
+            linkedin=:linkedin, portfolio=:portfolio, summary=:summary, 
+            experience=:experience, education=:education, skills=:skills, 
+            certifications=:certifications
+        WHERE id=:uid
+    """)
+    db.execute(query, {
+        "name": profile.name,
+        "email": profile.email,
+        "phone": profile.phone,
+        "location": profile.location,
+        "linkedin": profile.linkedin,
+        "portfolio": profile.portfolio,
+        "summary": profile.summary,
+        "experience": profile.experience,
+        "education": profile.education,
+        "skills": profile.skills,
+        "certifications": profile.certifications,
+        "uid": current_user.id
+    })
+    db.commit()
+    return {"message": "Profile updated successfully"}
+
 # --- Company Questions Cache ---
 @app.get("/api/prep/company/{company_name}")
 async def get_company_prep(
@@ -841,12 +937,20 @@ async def create_interview_session_endpoint(
     session = InterviewSession(
         user_id=current_user.id,
         mode=request.mode,
-        job_application_id=request.job_id,
         transcript=[]
     )
     db.add(session)
     db.commit()
     db.refresh(session)
+    
+    # Manually update job_application_id to ensure it is saved even if the ORM model is outdated
+    if request.job_id:
+        db.execute(
+            text("UPDATE interview_sessions SET job_application_id = :job_id WHERE id = :id"),
+            {"job_id": request.job_id, "id": session.id}
+        )
+        db.commit()
+        
     return {"session_id": session.id}
 
 @app.post("/api/interviews/sessions/{session_id}/complete")
@@ -1064,19 +1168,28 @@ async def get_interview_history(
     db: Session = Depends(get_db)
 ):
     """Get user's interview history with transcripts"""
-    sessions = crud.get_user_interview_sessions(db, current_user.id)
-    return [
-        {
-            "id": session.id,
-            "mode": session.mode,
-            "completed": session.completed,
-            "job_title": session.job_application.title if session.job_application else None,
-            "company": session.job_application.company if session.job_application else None,
-            "created_at": session.created_at,
-            "transcript": session.transcript
-        }
-        for session in sessions
-    ]
+    # Use raw SQL to fetch history with job details to avoid ORM relationship issues
+    query = text("""
+        SELECT 
+            s.id, s.mode, s.completed, s.created_at, s.transcript,
+            j.title as job_title, j.company
+        FROM interview_sessions s
+        LEFT JOIN job_applications j ON s.job_application_id = j.id
+        WHERE s.user_id = :user_id
+        ORDER BY s.created_at DESC
+    """)
+    
+    result = db.execute(query, {"user_id": current_user.id}).fetchall()
+    
+    return [{
+        "id": row.id,
+        "mode": row.mode,
+        "completed": row.completed,
+        "job_title": row.job_title,
+        "company": row.company,
+        "created_at": row.created_at,
+        "transcript": row.transcript
+    } for row in result]
 
 if __name__ == "__main__":
     import uvicorn

@@ -238,7 +238,7 @@ export function Dashboard() {
                   >
                     <div className="flex items-center gap-6 flex-1 text-left">
                       <div className="flex-1">
-                        <div className="font-semibold text-[#1f2328]">{session.company || 'Unknown'}</div>
+                        <div className="font-semibold text-[#1f2328]">{session.company || 'Unknown Company'}</div>
                         <div className="text-sm text-[#656d76]">{session.job_title || 'General Practice'}</div>
                       </div>
                       <div className="text-sm text-[#656d76]">{formatDate(session.created_at)}</div>
