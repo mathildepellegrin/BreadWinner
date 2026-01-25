@@ -13,6 +13,7 @@ from openai import OpenAI
 from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
 import crud
+import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -45,7 +46,12 @@ client = OpenAI(
 # --- Pydantic Models ---
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: Optional[str] = None
+    password:str
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
 
 class ResumeParseRequest(BaseModel):
     text: str = Field(..., max_length=settings.MAX_TEXT_LENGTH)
@@ -152,6 +158,29 @@ async def health():
         "api_key_configured": bool(settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY)
     }
 
+@app.post("/api/auth/signup")
+async def signup(request: SignupRequest, db: Session = Depends(get_db)):
+    """
+    Signup endpoint - creates new user
+    """
+    # Check if user exists
+    db_user = crud.get_user_by_email(db, email=request.email)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Create user
+    user = crud.create_user(db=db, email=request.email, name=request.name, password=request.password)
+    
+    token = create_token(user.id)
+    
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "token": token
+    }
+
+# UPDATE THE LOGIN ENDPOINT
 @app.post("/api/auth/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
@@ -165,8 +194,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Invalid email or password"
         )
     
-    # Verify password
-    if not user.password_hash or not request.password:
+    # Verify password exists and matches
+    if not user.password_hash:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
@@ -187,7 +216,6 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         "name": user.name,
         "token": token
     }
-
 # --- Company Questions Cache ---
 @app.get("/api/prep/company/{company_name}")
 async def get_company_prep(
