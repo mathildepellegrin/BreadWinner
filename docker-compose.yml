@@ -31,22 +31,35 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - /app/__pycache__
     environment:
       - DATABASE_URL=postgresql://admin:hackathon_secret@db:5432/mock_interview
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - JWT_SECRET=${JWT_SECRET:-hackathon-secret-key-2026}
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
     env_file:
       - .env
+    restart: unless-stopped
 
   # 3. Frontend Service (React/Vite)
   frontend:
-    build: ./frontend/interviewPrep
+    build: 
+      context: ./frontend/interviewPrep
+      dockerfile: Dockerfile
     container_name: interview_frontend
+    depends_on:
+      - backend
     ports:
-      - "5173:3000"
+      - "5173:5173"
     volumes:
       - ./frontend/interviewPrep:/app
       - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
     stdin_open: true
+    tty: true
+    restart: unless-stopped
 
 volumes:
   postgres_data:
