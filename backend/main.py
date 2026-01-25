@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from openai import OpenAI
 from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
+from livekit import api
 import crud
 
 # Configure logging
@@ -29,6 +30,9 @@ class Settings:
     MODEL_NAME: str = "google/gemini-2.0-flash-001"
     MAX_TEXT_LENGTH: int = 50000
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
+    LIVEKIT_API_KEY: str = os.environ.get("LIVEKIT_API_KEY", "devkey")
+    LIVEKIT_API_SECRET: str = os.environ.get("LIVEKIT_API_SECRET", "secret")
+    LIVEKIT_URL: str = os.environ.get("LIVEKIT_URL", "http://localhost:7880")
 
 settings = Settings()
 
@@ -152,16 +156,45 @@ async def health():
         "api_key_configured": bool(settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY)
     }
 
+@app.post("/api/auth/signup")
+async def signup(request: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Signup endpoint - creates a new user
+    """
+    existing_user = crud.get_user_by_email(db, request.email)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+    
+    if not request.password:
+        raise HTTPException(status_code=400, detail="Password is required")
+    
+    name = request.email.split('@')[0].capitalize()
+    user = crud.create_user(db, request.email, name, request.password)
+    
+    token = create_token(user.id)
+    
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "token": token
+    }
+
 @app.post("/api/auth/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
-    Login endpoint - creates user if doesn't exist
+    Login endpoint - verifies credentials
     """
     user = crud.get_user_by_email(db, request.email)
     if not user:
-        # Create new user
-        name = request.email.split('@')[0].capitalize()
-        user = crud.create_user(db, request.email, name, request.password)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if request.password and user.password_hash:
+        if not crud.verify_password(request.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+    elif request.password: # User exists but has no password hash (shouldn't happen with signup fixed)
+         # Fallback for legacy users or handle as needed
+         pass
     
     token = create_token(user.id)
     
@@ -444,6 +477,50 @@ async def parse_resume(
         "data": parsed_data,
         "created_at": resume.created_at
     }
+@app.post("/api/profile/resumes")
+async def save_resume(
+    request: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Save structured resume data to database"""
+    resume_name = request.get("name", f"Resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    content = request.get("data")
+    original_text = request.get("text", "")
+    
+    if not content:
+        raise HTTPException(status_code=400, detail="Resume data is required")
+    
+    resume = crud.create_resume(db, current_user.id, resume_name, content, original_text)
+    
+    return {
+        "id": resume.id,
+        "name": resume.name,
+        "created_at": resume.created_at
+    }
+
+# --- LiveKit Route ---
+@app.get("/api/livekit/token")
+async def get_livekit_token(
+    current_user: User = Depends(get_current_user)
+):
+    """Generate LiveKit access token"""
+    try:
+        room_name = f"interview-{current_user.id}"
+        participant_name = current_user.name
+        
+        token = api.AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET) \
+            .with_identity(str(current_user.id)) \
+            .with_name(participant_name) \
+            .with_grants(api.VideoGrants(
+                room_join=True,
+                room=room_name
+            ))
+            
+        return {"token": token.to_jwt(), "url": settings.LIVEKIT_URL, "room": room_name}
+    except Exception as e:
+        logger.error(f"LiveKit token generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate LiveKit token")
 
 @app.post("/api/jobs/ingest")
 async def ingest_job(

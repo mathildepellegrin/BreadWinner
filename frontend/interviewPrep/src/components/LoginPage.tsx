@@ -7,11 +7,27 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    // Mock authentication - in production, this would validate credentials
-    if (email && password) {
-      navigate('/dashboard');
+    try {
+      const response = await fetch('http://localhost:8000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data));
+        navigate('/dashboard');
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Login failed');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      alert('Could not connect to server');
     }
   };
 

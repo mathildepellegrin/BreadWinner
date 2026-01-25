@@ -1,8 +1,9 @@
 fastapi
 uvicorn
-python-multipart
+sqlalchemy
+psycopg2-binary
 openai
 python-dotenv
 pydantic[email]
-sqlalchemy
-psycopg2-binary
+livekit-api
+passlib[bcrypt]

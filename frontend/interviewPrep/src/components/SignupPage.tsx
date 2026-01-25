@@ -8,11 +8,27 @@ export function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    // Mock authentication - in production, this would create an account
-    if (name && email && password) {
-      navigate('/dashboard');
+    try {
+      const response = await fetch('http://localhost:8000/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data));
+        navigate('/dashboard');
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Signup failed');
+      }
+    } catch (err) {
+      console.error('Signup error:', err);
+      alert('Could not connect to server');
     }
   };
 
