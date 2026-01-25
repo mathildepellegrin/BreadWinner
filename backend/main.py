@@ -174,37 +174,141 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 # --- Company Questions Cache ---
 @app.get("/api/prep/company/{company_name}")
-async def get_company_prep(company_name: str, db: Session = Depends(get_db), token: str = Depends(verify_token)):
+async def get_company_prep(
+    company_name: str, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
     """Check cache for company questions; generate via AI if not found."""
-    company = crud.get_company_by_name(db, company_name)
+    # Configuration - easily changeable later
+    QUESTIONS_PER_CATEGORY = 1  # Change to 5 later
     
-    if company:
-        logger.info(f"Cache Hit for {company_name}")
-        return {"company": company.name, "questions": company.questions}
+    try:
+        company = crud.get_company_by_name(db, company_name)
+        
+        if company and company.questions:
+            logger.info(f"Cache Hit for {company_name}")
+            questions_data = [
+                {
+                    "id": q.id,
+                    "category": q.category,
+                    "title": q.title,
+                    "text": q.text,
+                    "leetcode_slug": q.leetcode_slug,
+                    "ideal_answer": q.ideal_answer
+                }
+                for q in company.questions
+            ]
+            return {
+                "company": company.name,
+                "questions": questions_data,
+                "cached": True,
+                "generated_at": company.last_updated.isoformat() if company.last_updated else None
+            }
 
-    logger.info(f"Cache Miss for {company_name}. Generating new questions...")
-    prompt = f"""
-    Generate 15 interview questions for {company_name}. 
-    Categories: 5 'leetcode', 5 'technical', 5 'behavioral'.
-    For 'leetcode', include 'leetcode_slug' (e.g., 'two-sum').
-    Return JSON: {{ "questions": [ {{ "category": "leetcode", "title": "Two Sum", "text": "Given an array...", "leetcode_slug": "two-sum", "ideal_answer": "Use hashmap..." }} ] }}
-    """
-    ai_data = await safe_generate_json(prompt)
-    
-    new_company = crud.create_company(db, company_name.capitalize())
-    
-    for q in ai_data.get('questions', []):
-        crud.create_question(
-            db, new_company.id,
-            q['category'],
-            q['title'], 
-            q['text'],
-            q['ideal_answer'],
-            q.get('leetcode_slug')
-        )
-    
-    db.refresh(new_company)
-    return {"company": new_company.name, "questions": new_company.questions}
+        logger.info(f"Cache Miss for {company_name}. Generating new questions...")
+        
+        if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
+            # Return mock data if AI not configured
+            return {
+                "company": company_name,
+                "questions": [
+                    {
+                        "id": 1,
+                        "category": "leetcode",
+                        "title": "Two Sum",
+                        "text": "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.",
+                        "leetcode_slug": "two-sum",
+                        "ideal_answer": "Use hashmap to store complements. Time: O(n), Space: O(n)"
+                    },
+                    {
+                        "id": 2,
+                        "category": "technical",
+                        "title": "System Design",
+                        "text": f"How would you design a scalable system at {company_name}?",
+                        "leetcode_slug": None,
+                        "ideal_answer": "Consider microservices, load balancing, and database optimization."
+                    },
+                    {
+                        "id": 3,
+                        "category": "behavioral",
+                        "title": "Team Collaboration",
+                        "text": "Tell me about a time when you had to work with a difficult team member.",
+                        "leetcode_slug": None,
+                        "ideal_answer": "Use STAR method: Situation, Task, Action, Result."
+                    }
+                ],
+                "cached": False,
+                "generated_at": datetime.now().isoformat(),
+                "note": "Mock data - AI service not configured"
+            }
+        
+        # AI Generation logic would go here
+        prompt = f"""
+        Generate {QUESTIONS_PER_CATEGORY * 3} interview questions for {company_name}. 
+        Create exactly {QUESTIONS_PER_CATEGORY} question(s) for each category: 'leetcode', 'technical', 'behavioral'.
+        
+        Return JSON with questions array.
+        """
+        
+        ai_data = await safe_generate_json(prompt)
+        
+        # Create company if doesn't exist
+        if not company:
+            company = crud.create_company(db, company_name.capitalize())
+        
+        # Save questions to database
+        for q in ai_data.get('questions', []):
+            crud.create_question(
+                db, company.id,
+                q['category'],
+                q['title'], 
+                q['text'],
+                q['ideal_answer'],
+                q.get('leetcode_slug')
+            )
+        
+        # Refresh to get questions with IDs
+        db.refresh(company)
+        
+        questions_data = [
+            {
+                "id": q.id,
+                "category": q.category,
+                "title": q.title,
+                "text": q.text,
+                "leetcode_slug": q.leetcode_slug,
+                "ideal_answer": q.ideal_answer
+            }
+            for q in company.questions
+        ]
+        
+        return {
+            "company": company.name,
+            "questions": questions_data,
+            "cached": False,
+            "generated_at": company.last_updated.isoformat() if company.last_updated else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in company prep for {company_name}: {e}")
+        # Return fallback response
+        return {
+            "company": company_name,
+            "questions": [
+                {
+                    "id": 1,
+                    "category": "leetcode",
+                    "title": "Array Problem",
+                    "text": "Solve a common array manipulation problem.",
+                    "leetcode_slug": None,
+                    "ideal_answer": "Focus on time and space complexity."
+                }
+            ],
+            "cached": False,
+            "generated_at": datetime.now().isoformat(),
+            "error": "Fallback data due to service error"
+        }
 
 # --- Protected Routes ---
 @app.post("/api/profile/parse")
