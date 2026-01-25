@@ -3,7 +3,7 @@ import uuid
 import json
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Body, Depends, Security, status
+from fastapi import FastAPI, HTTPException, Body, Depends, Security, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -13,6 +13,9 @@ from openai import OpenAI
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+import PyPDF2
+from docx import Document
+import io
 from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
 import crud
@@ -134,7 +137,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -209,6 +212,46 @@ def scrape_job_posting(url: str) -> str:
     except Exception as e:
         logger.error(f"Failed to scrape URL {url}: {e}")
         raise HTTPException(status_code=400, detail=f"Failed to scrape job posting: {str(e)}")
+
+def extract_text_from_file(file_content: bytes, filename: str) -> str:
+    """Extract text from PDF or DOCX file"""
+    try:
+        file_ext = filename.lower().split('.')[-1]
+        
+        if file_ext == 'pdf':
+            # Extract text from PDF
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_content))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            logger.info(f"Extracted {len(text)} characters from PDF")
+            
+        elif file_ext in ['docx', 'doc']:
+            # Extract text from DOCX
+            doc = Document(io.BytesIO(file_content))
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            logger.info(f"Extracted {len(text)} characters from DOCX")
+            
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload PDF or DOCX.")
+        
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        text = '\n'.join(line for line in lines if line)
+        
+        if len(text) < 50:
+            raise HTTPException(status_code=400, detail="Could not extract meaningful content from the file.")
+        
+        # Limit text length
+        if len(text) > settings.MAX_TEXT_LENGTH:
+            text = text[:settings.MAX_TEXT_LENGTH]
+        
+        return text
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to extract text from file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse CV file: {str(e)}")
 
 # --- Public Routes ---
 @app.get("/api/health")
@@ -544,6 +587,149 @@ async def update_job_status(
     db.refresh(job)
     return {"status": job.status}
 
+@app.get("/api/profile")
+async def get_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current user's profile"""
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "phone": user.phone,
+        "location": user.location,
+        "linkedin": user.linkedin,
+        "portfolio": user.portfolio,
+        "summary": user.summary,
+        "workExperience": user.work_experience,
+        "education": user.education,
+        "skills": user.skills,
+        "certifications": user.certifications
+    }
+
+@app.put("/api/profile")
+async def update_profile(
+    profile: Dict[str, Any] = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update current user's profile"""
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update fields
+    if "name" in profile:
+        user.name = profile["name"]
+    if "phone" in profile:
+        user.phone = profile["phone"]
+    if "location" in profile:
+        user.location = profile["location"]
+    if "linkedin" in profile:
+        user.linkedin = profile["linkedin"]
+    if "portfolio" in profile:
+        user.portfolio = profile["portfolio"]
+    if "summary" in profile:
+        user.summary = profile["summary"]
+    if "workExperience" in profile:
+        user.work_experience = profile["workExperience"]
+    if "education" in profile:
+        user.education = profile["education"]
+    if "skills" in profile:
+        user.skills = profile["skills"]
+    if "certifications" in profile:
+        user.certifications = profile["certifications"]
+    
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "phone": user.phone,
+        "location": user.location,
+        "linkedin": user.linkedin,
+        "portfolio": user.portfolio,
+        "summary": user.summary,
+        "workExperience": user.work_experience,
+        "education": user.education,
+        "skills": user.skills,
+        "certifications": user.certifications
+    }
+
+@app.post("/api/profile/parse-cv")
+async def parse_cv(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Parse CV file and extract profile information using AI"""
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    logger.info(f"CV parsing request for file: {file.filename}")
+    
+    try:
+        # Read file content
+        file_content = await file.read()
+        logger.info(f"Read {len(file_content)} bytes from file")
+        
+        # Extract text from PDF or DOCX
+        cv_text = extract_text_from_file(file_content, file.filename)
+        logger.info(f"Extracted text length: {len(cv_text)}")
+        
+        # Use AI to parse and structure the CV data
+        logger.info("Sending CV to AI for parsing...")
+        prompt = f"""
+        You are a CV/Resume parser. Extract and structure the following information from this CV/Resume.
+        Return a valid JSON object with these exact fields:
+        - name: The person's full name
+        - phone: Phone number (empty string if not found)
+        - location: Current location/city (empty string if not found)
+        - linkedin: LinkedIn profile URL (empty string if not found)
+        - portfolio: Portfolio or personal website URL (empty string if not found)
+        - summary: A professional summary (2-3 sentences summarizing their experience and expertise)
+        - workExperience: Work experience formatted as text with job titles, companies, dates, and bullet points of achievements
+        - education: Education details with degree, institution, and dates
+        - skills: A comma-separated list of technical and professional skills
+        - certifications: Professional certifications with names and years (empty string if none found)
+        
+        CV Content:
+        {cv_text}
+        
+        Return ONLY valid JSON, no additional text.
+        """
+        
+        cv_data = await safe_generate_json(prompt)
+        logger.info(f"AI parsing complete. Extracted profile for: {cv_data.get('name', 'N/A')}")
+        
+        # Format the data for the frontend
+        result = {
+            "name": cv_data.get("name", ""),
+            "phone": cv_data.get("phone", ""),
+            "location": cv_data.get("location", ""),
+            "linkedin": cv_data.get("linkedin", ""),
+            "portfolio": cv_data.get("portfolio", ""),
+            "summary": cv_data.get("summary", ""),
+            "workExperience": cv_data.get("workExperience", ""),
+            "education": cv_data.get("education", ""),
+            "skills": cv_data.get("skills", ""),
+            "certifications": cv_data.get("certifications", "")
+        }
+        
+        logger.info("CV parsing successful")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CV parsing failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to parse CV: {str(e)}")
+
 @app.get("/api/jobs/{job_id}/analysis")
 async def get_job_analysis(
     job_id: int,
@@ -581,6 +767,125 @@ async def get_job_analysis(
     return {
         "gaps": job.gaps
     }
+
+@app.post("/api/jobs/{job_id}/generate-topics")
+async def generate_interview_topics(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate interview preparation topics based on job and profile"""
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if topics already exist
+    if job.technical_topics and job.behavioral_topics and job.leetcode_topics:
+        logger.info(f"Topics already exist for job {job_id}, returning existing")
+        return {
+            "technicalTopics": job.technical_topics,
+            "behavioralTopics": job.behavioral_topics,
+            "leetcodeTopics": job.leetcode_topics
+        }
+    
+    logger.info(f"Generating interview topics for job {job_id}")
+    
+    # Build profile context
+    profile_context = ""
+    if current_user.summary or current_user.work_experience or current_user.skills:
+        profile_context = f"""
+Candidate Profile:
+- Summary: {current_user.summary or 'Not provided'}
+- Work Experience: {current_user.work_experience or 'Not provided'}
+- Education: {current_user.education or 'Not provided'}
+- Skills: {current_user.skills or 'Not provided'}
+"""
+    else:
+        profile_context = "No candidate profile available."
+    
+    # Build job context
+    job_context = f"""
+Job Title: {job.title}
+Company: {job.company}
+Location: {job.location or 'Not specified'}
+Interview Type: {job.interview_type or 'General'}
+Description: {job.description or 'Not provided'}
+"""
+    
+    if job.requirements:
+        job_context += f"\nRequirements: {', '.join(job.requirements) if isinstance(job.requirements, list) else job.requirements}"
+    
+    if job.responsibilities:
+        job_context += f"\nResponsibilities: {', '.join(job.responsibilities) if isinstance(job.responsibilities, list) else job.responsibilities}"
+    
+    # Generate topics using AI
+    prompt = f"""
+You are an expert interview preparation coach. Based on the following job posting and candidate profile, generate personalized interview preparation topics.
+
+{job_context}
+
+{profile_context}
+
+Please analyze the job requirements and candidate's background to generate:
+1. Exactly 7 technical/theoretical topics the candidate should study
+2. Exactly 7 behavioral topics/questions the candidate should prepare for
+3. Between 2-5 LeetCode-style algorithmic topics/patterns to practice
+
+Return ONLY valid JSON in this exact format:
+{{
+    "technicalTopics": [
+        "Topic 1 with brief description",
+        "Topic 2 with brief description",
+        "Topic 3 with brief description",
+        "Topic 4 with brief description",
+        "Topic 5 with brief description",
+        "Topic 6 with brief description",
+        "Topic 7 with brief description"
+    ],
+    "behavioralTopics": [
+        "Behavioral topic/question 1",
+        "Behavioral topic/question 2",
+        "Behavioral topic/question 3",
+        "Behavioral topic/question 4",
+        "Behavioral topic/question 5",
+        "Behavioral topic/question 6",
+        "Behavioral topic/question 7"
+    ],
+    "leetcodeTopics": [
+        "LeetCode pattern/topic 1",
+        "LeetCode pattern/topic 2",
+        "LeetCode pattern/topic 3"
+    ]
+}}
+
+Make the topics specific to the job role and relevant to the candidate's experience level.
+"""
+    
+    try:
+        topics_data = await safe_generate_json(prompt)
+        logger.info(f"AI generated topics for job {job_id}")
+        
+        # Update job with generated topics
+        job.technical_topics = topics_data.get("technicalTopics", [])
+        job.behavioral_topics = topics_data.get("behavioralTopics", [])
+        job.leetcode_topics = topics_data.get("leetcodeTopics", [])
+        
+        db.commit()
+        db.refresh(job)
+        
+        logger.info(f"Topics saved to database for job {job_id}")
+        
+        return {
+            "technicalTopics": job.technical_topics,
+            "behavioralTopics": job.behavioral_topics,
+            "leetcodeTopics": job.leetcode_topics
+        }
+    except Exception as e:
+        logger.error(f"Failed to generate topics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate topics: {str(e)}")
 
 @app.post("/api/interviews/question")
 async def get_question(

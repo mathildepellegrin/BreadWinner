@@ -12,6 +12,7 @@ export function InterviewDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<TopicCategory>('technical');
+  const [isGeneratingTopics, setIsGeneratingTopics] = useState(false);
 
   useEffect(() => {
     const fetchJob = async () => {
@@ -22,6 +23,25 @@ export function InterviewDetail() {
         setError(null);
         const jobData = await getJobApplication(parseInt(id));
         setJob(jobData);
+        
+        console.log('Job data loaded:', {
+          id: jobData.id,
+          hasTechnical: jobData.technicalTopics?.length,
+          hasBehavioral: jobData.behavioralTopics?.length,
+          hasLeetcode: jobData.leetcodeTopics?.length
+        });
+        
+        // Generate topics if they don't exist or are empty
+        const needsTopics = !jobData.technicalTopics?.length || 
+                           !jobData.behavioralTopics?.length || 
+                           !jobData.leetcodeTopics?.length;
+        
+        if (needsTopics) {
+          console.log('Generating topics for job', id);
+          await generateTopics(parseInt(id), jobData);
+        } else {
+          console.log('Topics already exist, skipping generation');
+        }
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : "Failed to load job details";
@@ -34,6 +54,49 @@ export function InterviewDetail() {
 
     fetchJob();
   }, [id]);
+
+  const generateTopics = async (jobId: number, currentJob: Job) => {
+    setIsGeneratingTopics(true);
+    console.log('Starting topic generation for job', jobId);
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error('Not authenticated');
+      }
+
+      console.log('Calling generate-topics API...');
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/generate-topics`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log('API response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to generate topics');
+      }
+
+      const topicsData = await response.json();
+      console.log('Topics generated successfully:', topicsData);
+      
+      // Update the job with generated topics
+      setJob({
+        ...currentJob,
+        technicalTopics: topicsData.technicalTopics,
+        behavioralTopics: topicsData.behavioralTopics,
+        leetcodeTopics: topicsData.leetcodeTopics
+      });
+    } catch (err) {
+      console.error('Failed to generate topics:', err);
+      // Don't show error to user, topics are optional
+    } finally {
+      setIsGeneratingTopics(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -267,8 +330,17 @@ export function InterviewDetail() {
           </div>
         )}
 
-        {/* Topics to Study - Only show if any topics exist */}
-        {((job.technicalTopics && job.technicalTopics.length > 0) ||
+        {/* Topics to Study - Show loading state or topics */}
+        {isGeneratingTopics && (
+          <div className="mt-8 bg-white border border-[#d0d7de] rounded-lg p-8">
+            <div className="flex items-center justify-center gap-3">
+              <div className="size-6 border-3 border-[#0969da] border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-[#656d76] font-medium">Generating personalized interview topics...</p>
+            </div>
+          </div>
+        )}
+
+        {!isGeneratingTopics && ((job.technicalTopics && job.technicalTopics.length > 0) ||
           (job.behavioralTopics && job.behavioralTopics.length > 0) ||
           (job.leetcodeTopics && job.leetcodeTopics.length > 0)) && (
           <div className="mt-8 space-y-6">

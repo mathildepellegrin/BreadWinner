@@ -7,6 +7,7 @@ import { InterviewDetail } from "./components/InterviewDetail";
 import { AISimulation } from "./components/AISimulation";
 import { AddInterview } from "./components/AddInterview";
 import { Profile } from "./components/Profile";
+import { ProfileView } from "./components/ProfileView";
 
 export const router = createBrowserRouter([
   {
@@ -27,6 +28,10 @@ export const router = createBrowserRouter([
   },
   {
     path: "/profile",
+    Component: ProfileView,
+  },
+  {
+    path: "/profile/edit",
     Component: Profile,
   },
   {

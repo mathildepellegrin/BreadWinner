@@ -180,3 +180,34 @@ export async function getJobApplication(id: number): Promise<Job> {
     throw error;
   }
 }
+
+/**
+ * Update job status (Upcoming or Completed)
+ */
+export async function updateJobStatus(jobId: number, status: "Upcoming" | "Completed"): Promise<void> {
+  try {
+    console.log(`🔄 Updating job ${jobId} status to ${status}...`);
+
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/status`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeader(),
+      },
+      body: JSON.stringify({ status }),
+    });
+
+    console.log("📡 Update status API response:", response.status);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error("❌ Update status API error:", error);
+      throw new Error(error.detail || "Failed to update job status");
+    }
+
+    console.log("✅ Job status updated successfully");
+  } catch (error) {
+    console.error("❌ Error updating job status:", error);
+    throw error;
+  }
+}

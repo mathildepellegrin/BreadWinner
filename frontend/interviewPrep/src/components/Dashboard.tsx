@@ -4,17 +4,17 @@ import {
   LogOut,
   Calendar,
   CheckCircle,
-  Circle,
   Plus,
   User,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getJobApplications, type Job } from "../../apis/jobsService";
+import { getJobApplications, updateJobStatus, type Job } from "../../apis/jobsService";
 
 export function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [updatingStatus, setUpdatingStatus] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchJobs = async () => {
@@ -36,6 +36,22 @@ export function Dashboard() {
     fetchJobs();
   }, []);
 
+  const handleMarkCompleted = async (jobId: number) => {
+    setUpdatingStatus(jobId);
+    try {
+      await updateJobStatus(jobId, "Completed");
+      // Update local state
+      setJobs(jobs.map(job => 
+        job.id === jobId ? { ...job, status: "Completed" as const } : job
+      ));
+    } catch (err) {
+      console.error("Failed to update status:", err);
+      alert("Failed to mark interview as completed");
+    } finally {
+      setUpdatingStatus(null);
+    }
+  };
+
   // Categorize jobs by status
   const upcomingInterviews = jobs.filter(
     (job) => job.status === "Upcoming",
@@ -43,17 +59,6 @@ export function Dashboard() {
   const completedInterviews = jobs.filter(
     (job) => job.status === "Completed",
   );
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "Upcoming":
-        return <Circle className="size-4 text-[#0969da] fill-[#0969da]" />;
-      case "Completed":
-        return <CheckCircle className="size-4 text-[#1a7f37]" />;
-      default:
-        return <Circle className="size-4 text-[#656d76] fill-[#656d76]" />;
-    }
-  };
 
   const getStatusBadgeStyle = (status: string) => {
     switch (status) {
@@ -182,6 +187,9 @@ export function Dashboard() {
                       <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">
                         Status
                       </th>
+                      <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#d0d7de]">
@@ -220,16 +228,22 @@ export function Dashboard() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            {getStatusIcon(job.status)}
-                            <span
-                              className={`inline-block px-3 py-1 border rounded-md text-sm capitalize ${getStatusBadgeStyle(
-                                job.status,
-                              )}`}
-                            >
-                              {job.status}
-                            </span>
-                          </div>
+                          <span
+                            className={`inline-block px-3 py-1 border rounded-md text-sm capitalize ${getStatusBadgeStyle(
+                              job.status,
+                            )}`}
+                          >
+                            {job.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={() => handleMarkCompleted(job.id)}
+                            disabled={updatingStatus === job.id}
+                            className="text-sm text-[#1a7f37] hover:text-[#1f883d] font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {updatingStatus === job.id ? "Updating..." : "Mark as Completed"}
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -315,16 +329,13 @@ export function Dashboard() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            {getStatusIcon(job.status)}
-                            <span
-                              className={`inline-block px-3 py-1 border rounded-md text-sm capitalize ${getStatusBadgeStyle(
-                                job.status,
-                              )}`}
-                            >
-                              {job.status}
-                            </span>
-                          </div>
+                          <span
+                            className={`inline-block px-3 py-1 border rounded-md text-sm capitalize ${getStatusBadgeStyle(
+                              job.status,
+                            )}`}
+                          >
+                            {job.status}
+                          </span>
                         </td>
                       </tr>
                     ))}

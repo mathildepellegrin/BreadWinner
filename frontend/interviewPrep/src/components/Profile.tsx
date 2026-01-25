@@ -1,9 +1,14 @@
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Brain, ArrowLeft, User, Mail, Phone, MapPin, Briefcase, GraduationCap, Upload, FileText, CheckCircle } from 'lucide-react';
-import { FormEvent, useState } from 'react';
+import { type FormEvent, useState, useEffect } from 'react';
+import { getProfile, updateProfile } from '../../apis/profileService';
+import { getAuthToken } from '../../apis/authService';
 
 export function Profile() {
+  const navigate = useNavigate();
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success'>('idle');
+  const [isSaving, setIsSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   
   // Personal Information
   const [fullName, setFullName] = useState('');
@@ -28,55 +33,131 @@ export function Profile() {
   // Certifications
   const [certifications, setCertifications] = useState('');
 
+  useEffect(() => {
+    loadProfile();
+  }, []);
+
+  const loadProfile = async () => {
+    try {
+      const profile = await getProfile();
+      setFullName(profile.name || '');
+      setEmail(profile.email || '');
+      setPhone(profile.phone || '');
+      setLocation(profile.location || '');
+      setLinkedIn(profile.linkedin || '');
+      setPortfolio(profile.portfolio || '');
+      setSummary(profile.summary || '');
+      setWorkExperience(profile.workExperience || '');
+      setEducation(profile.education || '');
+      setSkills(profile.skills || '');
+      setCertifications(profile.certifications || '');
+    } catch (error) {
+      console.error('Failed to load profile:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Validate file type
+    const validTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    if (!validTypes.includes(file.type)) {
+      alert('Please upload a PDF or Word document (.pdf, .doc, .docx)');
+      return;
+    }
+
     setUploadStatus('uploading');
     
-    // Simulate CV parsing - in production, this would call an AI service
-    setTimeout(() => {
-      // Mock auto-filled data from CV
-      setFullName('John Doe');
-      setEmail('john.doe@example.com');
-      setPhone('+1 (555) 123-4567');
-      setLocation('San Francisco, CA');
-      setLinkedIn('linkedin.com/in/johndoe');
-      setPortfolio('johndoe.dev');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const token = getAuthToken();
+      if (!token) {
+        throw new Error('Not authenticated');
+      }
+
+      const response = await fetch('http://localhost:8000/api/profile/parse-cv', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to parse CV');
+      }
+
+      const cvData = await response.json();
       
-      setSummary('Experienced software engineer with 5+ years building scalable web applications. Expertise in React, Node.js, and cloud infrastructure. Passionate about creating user-centric solutions and mentoring junior developers.');
+      // Auto-fill form fields with parsed data
+      if (cvData.name) setFullName(cvData.name);
+      if (cvData.phone) setPhone(cvData.phone);
+      if (cvData.location) setLocation(cvData.location);
+      if (cvData.linkedin) setLinkedIn(cvData.linkedin);
+      if (cvData.portfolio) setPortfolio(cvData.portfolio);
+      if (cvData.summary) setSummary(cvData.summary);
+      if (cvData.workExperience) setWorkExperience(cvData.workExperience);
+      if (cvData.education) setEducation(cvData.education);
+      if (cvData.skills) setSkills(cvData.skills);
+      if (cvData.certifications) setCertifications(cvData.certifications);
       
-      setWorkExperience(`Senior Software Engineer • TechCorp Inc. • 2021 - Present
-• Led development of microservices architecture serving 10M+ users
-• Improved application performance by 40% through optimization
-• Mentored team of 5 junior developers
-
-Software Engineer • StartupXYZ • 2019 - 2021
-• Built real-time collaboration features using WebSockets
-• Implemented CI/CD pipelines reducing deployment time by 60%
-• Contributed to open-source projects`);
-
-      setEducation(`Bachelor of Science in Computer Science
-University of California, Berkeley • 2015 - 2019
-GPA: 3.8/4.0`);
-
-      setSkills('JavaScript, TypeScript, React, Node.js, Python, AWS, Docker, Kubernetes, PostgreSQL, MongoDB, Git, CI/CD, Agile, System Design');
-
-      setCertifications(`AWS Certified Solutions Architect • 2022
-Certified Kubernetes Administrator • 2021`);
-
       setUploadStatus('success');
       
-      // Reset success status after 3 seconds
+      // Reset status after 3 seconds
       setTimeout(() => setUploadStatus('idle'), 3000);
-    }, 2000);
+    } catch (error) {
+      console.error('CV parsing error:', error);
+      alert(error instanceof Error ? error.message : 'Failed to parse CV. Please try again.');
+      setUploadStatus('idle');
+    }
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    // Mock save - in production, this would save to database
-    alert('Profile saved successfully!');
+    
+    setIsSaving(true);
+    
+    try {
+      await updateProfile({
+        name: fullName,
+        phone: phone,
+        location: location,
+        linkedin: linkedIn,
+        portfolio: portfolio,
+        summary: summary,
+        workExperience: workExperience,
+        education: education,
+        skills: skills,
+        certifications: certifications
+      });
+      
+      alert('Profile saved successfully!');
+      navigate('/dashboard');
+    } catch (error) {
+      console.error('Failed to save profile:', error);
+      alert('Failed to save profile. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#f6f8fa] flex items-center justify-center">
+        <div className="size-8 border-4 border-[#0969da] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f6f8fa]">
@@ -376,9 +457,10 @@ Certification Name • Year"
           <div className="flex gap-4">
             <button
               type="submit"
-              className="flex-1 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-semibold transition-colors"
+              disabled={isSaving}
+              className="flex-1 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Profile
+              {isSaving ? 'Saving...' : 'Save Profile'}
             </button>
             <Link
               to="/dashboard"

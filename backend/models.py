@@ -12,6 +12,17 @@ class User(Base):
     password_hash = Column(String, nullable=True)  # Optional for now
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
+    # Profile fields
+    phone = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    linkedin = Column(String, nullable=True)
+    portfolio = Column(String, nullable=True)
+    summary = Column(Text, nullable=True)
+    work_experience = Column(Text, nullable=True)
+    education = Column(Text, nullable=True)
+    skills = Column(Text, nullable=True)
+    certifications = Column(Text, nullable=True)
+    
     # Relationships
     resumes = relationship("Resume", back_populates="user")
     job_applications = relationship("JobApplication", back_populates="user")
