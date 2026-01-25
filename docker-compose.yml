@@ -34,6 +34,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://admin:hackathon_secret@db:5432/mock_interview
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
     env_file:
       - .env
 

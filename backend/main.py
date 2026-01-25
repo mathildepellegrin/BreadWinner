@@ -14,6 +14,7 @@ from database import SessionLocal, engine, get_db
 from models import Base, User, Resume, JobApplication, InterviewSession, Company, Question
 import crud
 import hashlib
+from firecrawl import FirecrawlApp
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +31,7 @@ class Settings:
     MODEL_NAME: str = "google/gemini-2.0-flash-001"
     MAX_TEXT_LENGTH: int = 50000
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
+    FIRECRAWL_API_KEY: str = os.environ.get("FIRECRAWL_API_KEY", "")
 
 settings = Settings()
 
@@ -42,6 +44,11 @@ client = OpenAI(
         "X-Title": "BreadWinner AI",
     }
 )
+
+# Initialize Firecrawl Client
+firecrawl_app = None
+if settings.FIRECRAWL_API_KEY:
+    firecrawl_app = FirecrawlApp(api_key=settings.FIRECRAWL_API_KEY)
 
 # --- Pydantic Models ---
 class LoginRequest(BaseModel):
@@ -82,6 +89,19 @@ class InterviewReportRequest(BaseModel):
 
 class JobStatusUpdate(BaseModel):
     status: str = Field(..., pattern="^(Applied|Interviewing|Rejected|Offer)$")
+
+class JobParseRequest(BaseModel):
+    url: str
+
+class JobCreateRequest(BaseModel):
+    title: str
+    company: str
+    description: Optional[str] = ""
+    requirements: List[str] = []
+    benefits: List[str] = []
+    url: Optional[str] = None
+    location: Optional[str] = None
+    salary: Optional[str] = None
 
 class PrepMaterialsRequest(BaseModel):
     job_id: int
@@ -489,6 +509,106 @@ async def parse_resume(
         "created_at": resume.created_at
     }
 
+@app.post("/api/jobs/parse")
+async def parse_job_details(request: JobParseRequest):
+    """Parse job details from URL without saving"""
+    if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    prompt = f"""
+    Extract job information from the following URL context.
+    Return JSON with: 
+    - title
+    - company
+    - description
+    - requirements (array of strings)
+    - benefits (array of strings)
+    - location
+    - salary_range
+    
+    URL: {request.url}
+    """
+    
+    return await safe_generate_json(prompt)
+
+@app.post("/api/jobs/auto-fill")
+async def auto_fill_job(request: JobParseRequest):
+    """Auto-fill job details using Firecrawl for scraping and AI for parsing"""
+    if not firecrawl_app:
+        raise HTTPException(status_code=503, detail="Firecrawl service not configured")
+    
+    try:
+        # Scrape the URL
+        scrape_result = None
+        if hasattr(firecrawl_app, 'scrape_url'):
+            try:
+                scrape_result = firecrawl_app.scrape_url(request.url, params={'formats': ['markdown']})
+            except TypeError:
+                pass
+        
+        if scrape_result is None and hasattr(firecrawl_app, 'scrape'):
+            try:
+                scrape_result = firecrawl_app.scrape(request.url, params={'formats': ['markdown']})
+            except TypeError:
+                scrape_result = firecrawl_app.scrape(request.url)
+
+        if scrape_result is None:
+            raise HTTPException(status_code=500, detail="Firecrawl client configuration error: method not found")
+            
+        markdown_content = scrape_result.get('markdown', '') if isinstance(scrape_result, dict) else str(scrape_result)
+        
+        if not markdown_content:
+            raise HTTPException(status_code=400, detail="Failed to scrape content from URL")
+            
+        prompt = f"""
+        Extract job information from the following job posting content.
+        Return JSON with: 
+        - title
+        - company
+        - description
+        - requirements (array of strings)
+        - benefits (array of strings)
+        - location
+        - salary_range
+        
+        Content:
+        {markdown_content[:settings.MAX_TEXT_LENGTH]}
+        """
+        
+        return await safe_generate_json(prompt)
+    except Exception as e:
+        logger.error(f"Auto-fill failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Auto-fill failed: {str(e)}")
+
+@app.post("/api/jobs")
+async def create_job(
+    request: JobCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new job application manually"""
+    # Note: We are passing fields supported by the current CRUD. 
+    # If you updated crud.py to support location/salary, add them here.
+    job_app = crud.create_job_application(
+        db=db,
+        user_id=current_user.id,
+        title=request.title,
+        company=request.company,
+        description=request.description,
+        requirements=request.requirements,
+        benefits=request.benefits,
+        url=request.url
+    )
+    
+    return {
+        "id": job_app.id,
+        "title": job_app.title,
+        "company": job_app.company,
+        "status": job_app.status,
+        "url": job_app.url,
+        "created_at": job_app.created_at
+    }
+
 @app.post("/api/jobs/ingest")
 async def ingest_job(
     request: JobIngestRequest,
@@ -806,6 +926,7 @@ async def get_interview_history(
             "mode": session.mode,
             "completed": session.completed,
             "job_title": session.job_application.title if session.job_application else None,
+            "company": session.job_application.company if session.job_application else None,
             "created_at": session.created_at
         }
         for session in sessions

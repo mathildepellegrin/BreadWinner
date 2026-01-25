@@ -22,29 +22,70 @@ export function AddInterview() {
     if (!jobUrl.trim()) return;
     
     setIsAutoFilling(true);
-    
-    // Simulate API call to fetch job posting details
-    setTimeout(() => {
-      // Mock auto-filled data
-      setCompany('TechCorp Inc.');
-      setPosition('Senior Full Stack Engineer');
-      setLocation('Remote');
-      setSalaryRange('$140k - $200k');
-      setDescription('Join our innovative team to build next-generation cloud applications that serve millions of users worldwide. You will work on cutting-edge technologies and collaborate with talented engineers.');
-      setResponsibilities('Design and develop scalable web applications\nLead technical design discussions\nMentor junior developers\nCollaborate with product and design teams');
-      setRequirements('5+ years of full-stack development experience\nProficiency in React, Node.js, and TypeScript\nExperience with cloud platforms (AWS/GCP)\nStrong problem-solving skills');
-      setCompanyValues('Innovation and creativity\nCustomer-centric approach\nCollaboration and teamwork\nContinuous learning and growth\nWork-life balance');
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:8000/api/jobs/auto-fill', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ url: jobUrl }),
+      });
+
+      if (!response.ok) throw new Error('Failed to parse job');
+
+      const data = await response.json();
       
+      setCompany(data.company || '');
+      setPosition(data.title || '');
+      setLocation(data.location || '');
+      setSalaryRange(data.salary_range || '');
+      setDescription(data.description || '');
+      setRequirements((data.requirements || []).join('\n'));
+      setCompanyValues((data.benefits || []).join('\n'));
+    } catch (error) {
+      console.error('Auto-fill failed:', error);
+      alert('Failed to auto-fill details. Please try again.');
+    } finally {
       setIsAutoFilling(false);
-    }, 1500);
+    }
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     
-    // In a real app, this would save to database
-    alert('Interview added successfully! (This would save to database in production)');
-    navigate('/dashboard');
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:8000/api/jobs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          title: position,
+          company,
+          description,
+          requirements: [
+            ...responsibilities.split('\n').filter(Boolean),
+            ...requirements.split('\n').filter(Boolean)
+          ],
+          benefits: companyValues.split('\n').filter(Boolean),
+          url: jobUrl,
+          location,
+          salary: salaryRange
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to create job');
+
+      navigate('/dashboard');
+    } catch (error) {
+      console.error('Submission failed:', error);
+      alert('Failed to save interview. Please try again.');
+    }
   };
 
   return (
