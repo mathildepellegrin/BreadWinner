@@ -1,32 +1,60 @@
 # BreadWinner AI 🍞
 
-BreadWinner is an AI-powered interview preparation and job tracking platform. It helps users practice with realistic AI interviewers, optimize their resumes, and manage their job search process efficiently.
+**Developed at ConUHacks X (2026)**
 
-## 🚀 Features
+BreadWinner AI is an advanced, AI-driven interview simulation and resume optimization platform designed to bridge the gap between academic learning and the rigorous demands of technical interviews. Built during a 24-hour sprint at Concordia University, it empowers students to practice with realistic AI avatars, optimize their resumes, and track their job search progress in one cohesive ecosystem.
 
-- **AI Interview Simulations**: Real-time video and voice interviews with an interactive AI avatar (powered by HeyGen & OpenAI).
-- **Smart Resume Parsing**: Upload PDF/DOCX resumes to automatically extract and structure professional details.
-- **Job Application Tracking**: Kanban-style or list view of job applications with status updates.
-- **Gap Analysis**: AI-driven comparison between your resume and job descriptions to identify missing skills.
-- **Study Lab**: Personalized interview preparation materials generated based on specific job roles.
+## 🚀 Project Mission
+
+Technical interviews are a distinct skill set from software engineering. Many qualified students fail not because of a lack of technical knowledge, but due to a lack of preparation for the interview format itself. BreadWinner democratizes access to high-quality mock interviews, providing real-time feedback and personalized study plans to help candidates land their dream jobs.
+
+## ✨ Key Features
+
+- **🤖 AI Interview Simulations**: Real-time, voice-interactive video interviews with an interactive AI avatar (powered by HeyGen & OpenRouter). The AI adapts questions based on your responses and provides instant feedback.
+- **📄 Smart Resume Parsing**: Upload PDF/DOCX resumes to automatically extract structured data using PyMuPDF and python-docx, enabling gap analysis against job descriptions.
+- **🔄 Automated Portfolio Updates**: Seamlessly syncs resume data with your user profile to keep your professional identity up-to-date.
+- **📊 Job Application Tracking**: A Kanban-style dashboard to manage applications, track status, and view "Match Scores" for specific roles.
+- **🧠 Study Lab**: Generates personalized technical, behavioral, and LeetCode study materials based on the specific requirements of a target job.
 
 ## 🛠️ Tech Stack
 
-### Backend
-- **Framework**: FastAPI (Python 3.11)
-- **Database**: PostgreSQL (hosted on Neon)
-- **ORM**: SQLAlchemy
-- **AI Models**: OpenAI / Google Gemini (via OpenRouter)
-- **Services**: 
-  - **HeyGen**: Streaming Avatar SDK for video interviews.
-  - **Firecrawl**: Web scraping for job descriptions.
-- **Deployment**: AWS Lambda (Docker container via ECR).
+| Category | Technologies |
+|----------|--------------|
+| **Backend** | FastAPI (Python 3.11), Pydantic, SQLAlchemy |
+| **Database** | PostgreSQL (Hosted on Neon), Psycopg2 |
+| **Frontend** | React (Vite), TypeScript, Tailwind CSS, Lucide Icons |
+| **AI & ML** | OpenRouter (Gemini 2.0/GPT-4), HeyGen SDK, Firecrawl |
+| **Infrastructure** | AWS Lambda, Amazon ECR, AWS Amplify, Docker |
+| **Tools** | Git, Postman, Docker Compose |
 
-### Frontend
-- **Framework**: React (Vite)
-- **Styling**: Tailwind CSS
-- **Icons**: Lucide React
-- **Deployment**: AWS Amplify
+## 🏗️ Architecture & Infrastructure
+
+We adopted a **Serverless Architecture** to ensure scalability and cost-efficiency, crucial for a hackathon project with potential for high burst traffic.
+
+### Backend: AWS Lambda & API Gateway
+- **Containerization**: The FastAPI backend is packaged as a Docker container. We utilized a multi-stage build process to ensure binary compatibility with Amazon Linux 2023, specifically handling `glibc` version mismatches for libraries like `PyMuPDF`.
+- **Mangum Adapter**: We used `Mangum` as an adapter to wrap our ASGI FastAPI application, allowing it to process events from AWS Lambda and API Gateway seamlessly.
+- **Proxy Integration**: API Gateway is configured with a proxy integration, forwarding all requests to the Lambda function. This allows FastAPI to handle routing internally, simplifying the cloud configuration.
+
+### Frontend: AWS Amplify
+- The React frontend is deployed via **AWS Amplify**, providing a robust CI/CD pipeline that automatically builds and deploys changes from our GitHub repository.
+- Environment variables are managed within Amplify to point to the dynamic API Gateway endpoints.
+
+## 🧠 Lessons Learned
+
+Building a full-stack AI application in 24 hours came with significant challenges. Here are our key takeaways:
+
+### 1. Serverless Constraints & Docker
+Deploying Python applications with C-extensions (like `psycopg2` and `PyMuPDF`) to AWS Lambda is non-trivial. We learned that local Docker environments (Debian-based) differ from Lambda's runtime (Amazon Linux).
+*   **Solution**: We switched to the `python:3.11-slim-bullseye` base image and forced `pip` to use `manylinux2014` wheels to ensure binary compatibility.
+
+### 2. The CORS Conundrum
+Connecting a frontend hosted on one domain (Amplify) to a backend on another (API Gateway) triggered strict CORS policies.
+*   **Solution**: We configured FastAPI's `CORSMiddleware` to accept specific origins dynamically and ensured our API Gateway responses included the necessary `Access-Control-Allow-Origin` headers.
+
+### 3. Stateless Authentication
+Since Lambda functions are ephemeral, storing session data in memory (like a simple token dictionary) caused failures when requests hit different container instances.
+*   **Solution**: We implemented stateless authentication using **JWT (JSON Web Tokens)**, allowing any Lambda instance to verify user identity without shared state.
 
 ## 📦 Installation & Setup
 
@@ -35,11 +63,18 @@ BreadWinner is an AI-powered interview preparation and job tracking platform. It
 - Node.js & npm
 - Docker (for deployment)
 
-### 1. Backend Setup
-
-Navigate to the backend directory:
+### Backend Setup
 ```bash
 cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Create .env file
+cp .env.example .env
+
+# Run locally
+uvicorn main:app --reload
 ```
 
 Create a virtual environment and install dependencies:
