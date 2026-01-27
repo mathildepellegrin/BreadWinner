@@ -52,7 +52,7 @@ export function InterviewDetail() {
 
         // Fetch Prep Materials (async, don't block UI)
         setLoadingPrep(true);
-        fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api/prep/materials'}`, {
+        fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/prep/materials`, {
           method: 'POST',
           headers: { 
             'Authorization': `Bearer ${token}`,
