@@ -41,8 +41,8 @@ export function Dashboard() {
         const headers = { 'Authorization': `Bearer ${token}` };
         
         const [jobsRes, interviewsRes] = await Promise.all([
-          fetch('http://localhost:8000/api/jobs', { headers }),
-          fetch('http://localhost:8000/api/interviews/history', { headers })
+          fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs`, { headers }),
+          fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/interviews/history`, { headers })
         ]);
 
         if (jobsRes.status === 401 || interviewsRes.status === 401) {

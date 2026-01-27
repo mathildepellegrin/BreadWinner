@@ -29,7 +29,7 @@ export function AISimulation() {
       
       try {
         const token = localStorage.getItem('token');
-        const res = await fetch(`http://localhost:8000/api/jobs/${id}`, {
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs/${id}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         
@@ -105,7 +105,7 @@ export function AISimulation() {
     
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:8000/api/interviews/sessions', {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/interviews/sessions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

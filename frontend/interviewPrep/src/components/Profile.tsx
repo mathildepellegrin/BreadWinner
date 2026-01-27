@@ -42,7 +42,7 @@ export function Profile() {
           return;
         }
 
-        const res = await fetch('http://localhost:8000/api/profile', {
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/profile`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -81,7 +81,7 @@ export function Profile() {
     
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:8000/api/profile/upload-cv', {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/profile/upload-cv`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -139,7 +139,7 @@ export function Profile() {
     
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:8000/api/profile', {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/profile`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

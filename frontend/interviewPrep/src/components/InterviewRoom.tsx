@@ -65,7 +65,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
       const token = localStorage.getItem('token');
       
       // 1. Fetch Token from our backend
-      const tokenRes = await fetch('http://localhost:8000/api/interviews/token', {
+      const tokenRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/interviews/token`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
@@ -167,7 +167,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const sendAnswer = async (text: string) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:8000/api/interviews/chat', {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/interviews/chat`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -219,7 +219,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(
-        `http://localhost:8000/api/interviews/sessions/${sessionId}/complete`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/interviews/sessions/${sessionId}/complete`,
         {
           method: 'POST',
           headers: {
