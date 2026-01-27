@@ -10,3 +10,4 @@ firecrawl-py
 pymupdf
 python-docx
 mangum
+pyjwt

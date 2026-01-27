@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import requests
+import jwt
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Body, Depends, Security, status, UploadFile, File
@@ -190,24 +191,25 @@ class UserProfileUpdate(BaseModel):
 # --- Security ---
 security = HTTPBearer()
 
-# Simple token store (in production, use Redis or a database)
-valid_tokens = {}  # token -> user_id mapping
-
 def create_token(user_id: int) -> str:
-    """Create a simple bearer token (in production, use JWT)"""
-    token = str(uuid.uuid4())
-    valid_tokens[token] = user_id
-    return token
+    """Create a JWT token"""
+    payload = {
+        "sub": str(user_id),
+        "exp": datetime.utcnow() + timedelta(days=7)
+    }
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     """Verify bearer token and return user_id"""
     token = credentials.credentials
-    if token not in valid_tokens:
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+        return int(payload.get("sub"))
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token"
         )
-    return valid_tokens[token]
 
 async def get_current_user(user_id: int = Depends(verify_token), db: Session = Depends(get_db)) -> User:
     """Get current authenticated user"""
