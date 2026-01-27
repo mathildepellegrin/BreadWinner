@@ -20,6 +20,7 @@ from firecrawl import FirecrawlApp
 import io
 import fitz # PyMuPDF
 from docx import Document
+from mangum import Mangum
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -1265,6 +1266,9 @@ async def get_interview_history(
         "created_at": row.created_at,
         "transcript": row.transcript
     } for row in result]
+
+# Handler for AWS Lambda
+handler = Mangum(app)
 
 if __name__ == "__main__":
     import uvicorn

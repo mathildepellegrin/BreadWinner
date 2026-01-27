@@ -9,3 +9,4 @@ psycopg2-binary
 firecrawl-py
 pymupdf
 python-docx
+mangum
