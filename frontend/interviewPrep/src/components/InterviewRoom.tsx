@@ -20,6 +20,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const userVideoRef = useRef<HTMLVideoElement>(null);
   const recognitionRef = useRef<any>(null);
   const userStreamRef = useRef<MediaStream | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Configuration - Use default avatar (empty string) which works
   const DEFAULT_AVATAR = "Wayne_20240711";
@@ -32,6 +33,18 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
       endSession();
     };
   }, []);
+
+  // Auto-scroll transcript to bottom
+  useEffect(() => {
+    if (transcriptRef.current) {
+      // Use setTimeout to ensure DOM has updated
+      setTimeout(() => {
+        if (transcriptRef.current) {
+          transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+        }
+      }, 0);
+    }
+  }, [transcript]);
 
   const initUserCamera = async () => {
     try {
@@ -226,16 +239,17 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   };
 
   return (
-    <div className="flex-1 p-6 flex items-center justify-center flex-col">
-      <div className="w-full max-w-7xl grid lg:grid-cols-3 gap-6 mb-6 h-[75vh]">
-        {/* AI Avatar - Left (Larger) */}
-        <div className="lg:col-span-2 bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden relative h-full">
+    <div className="fixed inset-0 z-50 bg-[#0d1117] flex justify-center overflow-hidden h-[100dvh]">
+      <div className="w-full max-w-3xl h-full flex flex-col p-4 gap-4">
+        {/* Videos Row */}
+        <div className="flex-none w-full flex flex-row gap-4 h-[30vh] min-h-[150px] max-h-[400px]">
+        {/* AI Avatar */}
+        <div className="flex-1 bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden relative">
           <video 
             ref={videoRef} 
             autoPlay 
             playsInline 
             muted={false}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             className="w-full h-full object-cover" 
           />
           {(isLoading || sessionState === 'loading') && (
@@ -251,41 +265,46 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
           </div>
         </div>
 
-        {/* Right Column: User Video + Transcript */}
-        <div className="flex flex-col gap-4 h-full">
-          {/* User Video - Small Overlay style */}
-          <div className="bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden aspect-video relative h-48 flex-shrink-0">
+        {/* User Video */}
+        <div className="flex-1 bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden relative">
             <video ref={userVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-            <div className="absolute bottom-2 left-2 bg-[#0d1117]/80 backdrop-blur-sm text-white px-2 py-0.5 rounded text-xs">
+            <div className="absolute bottom-4 left-4 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-sm">
               You
             </div>
-          </div>
+        </div>
+      </div>
 
-          {/* Live Transcript */}
-          <div className="flex-1 bg-[#161b22] border border-gray-800 rounded-lg p-4 overflow-y-auto flex flex-col">
-            <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-              <Brain className="size-4 text-[#58a6ff]" /> Live Transcript
-            </h3>
-            <div className="space-y-3 text-sm">
-              {transcript.map((t, i) => (
-                <div key={i} className={`p-2 rounded ${t.role === 'user' ? 'bg-[#1f6feb]/20 text-white ml-4' : 'bg-[#238636]/20 text-white mr-4'}`}>
-                  <strong className="block text-xs opacity-70 mb-1">{t.role === 'user' ? 'You' : 'Interviewer'}</strong>
-                  {t.text}
-                </div>
-              ))}
+      {/* Live Transcript */}
+      <div className="flex-1 w-full bg-[#161b22] border border-gray-800 rounded-lg flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-none p-3 border-b border-gray-800 bg-[#161b22] flex items-center gap-2">
+          <Brain className="size-4 text-[#58a6ff]" />
+          <span className="text-white font-semibold text-sm">Live Transcript</span>
+        </div>
+        <div ref={transcriptRef} className="flex-1 overflow-y-auto p-4 space-y-3 scroll-smooth">
+          {transcript.length === 0 ? (
+            <div className="text-gray-500 text-center text-sm italic mt-4">
+              Conversation will appear here...
             </div>
-          </div>
+          ) : (
+            transcript.map((t, i) => (
+              <div key={i} className={`p-2 rounded ${t.role === 'user' ? 'bg-[#1f6feb]/20 text-white ml-4' : 'bg-[#238636]/20 text-white mr-4'}`}>
+                <strong className="block text-xs opacity-70 mb-1">{t.role === 'user' ? 'You' : 'Interviewer'}</strong>
+                <div className="break-words whitespace-normal text-sm">{t.text}</div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
       {/* Controls */}
-      <div className="flex gap-4">
+      <div className="flex-none flex gap-4 justify-center">
         <button onClick={() => setIsListening(!isListening)} className={`p-4 rounded-full ${isListening ? 'bg-red-500' : 'bg-gray-700'} text-white`}>
           {isListening ? <Mic className="size-6" /> : <MicOff className="size-6" />}
         </button>
         <button onClick={endSession} className="px-6 py-4 bg-red-600 hover:bg-red-700 text-white rounded-full font-semibold flex items-center gap-2">
           <Phone className="size-5 rotate-135" /> End Interview
         </button>
+      </div>
       </div>
     </div>
   );
