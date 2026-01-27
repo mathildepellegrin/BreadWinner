@@ -42,7 +42,7 @@ export function InterviewDetail() {
         }
 
         // Fetch Job Details
-        const jobRes = await fetch(`http://localhost:8000/api/jobs/${id}`, {
+        const jobRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs/${id}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         

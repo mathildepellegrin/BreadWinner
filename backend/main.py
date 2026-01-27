@@ -85,7 +85,7 @@ run_migrations()
 class Settings:
     OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
     GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")  # Keep for backward compatibility
-    ALLOWED_ORIGINS: List[str] = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    ALLOWED_ORIGINS: List[str] = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
     MODEL_NAME: str = "google/gemini-2.0-flash-001"
     MAX_TEXT_LENGTH: int = 50000
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
