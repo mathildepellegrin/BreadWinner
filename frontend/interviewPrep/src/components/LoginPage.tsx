@@ -45,7 +45,7 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         <Link to="/" className="flex items-center justify-center gap-2 mb-8">
           <Brain className="size-8 text-[#0969da]" />
-          <span className="font-semibold text-xl text-[#1f2328]">InterviewPrep</span>
+          <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
         </Link>
 
         <div className="bg-white border border-[#d0d7de] rounded-lg p-8">

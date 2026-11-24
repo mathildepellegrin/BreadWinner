@@ -92,7 +92,7 @@ export function Dashboard() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Brain className="size-8 text-[#0969da]" />
-              <span className="font-semibold text-xl text-[#1f2328]">InterviewPrep</span>
+              <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
             </div>
             <div className="flex items-center gap-4">
               <Link

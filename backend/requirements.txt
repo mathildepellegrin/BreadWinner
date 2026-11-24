@@ -4,10 +4,11 @@ python-multipart
 openai
 python-dotenv
 pydantic[email]
-sqlalchemy
+sqlalchemy<2.1
 psycopg2-binary
 firecrawl-py
 pymupdf
 python-docx
 mangum
 pyjwt
+requests

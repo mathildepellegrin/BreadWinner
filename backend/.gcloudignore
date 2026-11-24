@@ -1,0 +1,11 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.DS_Store
+.git/
+InterviewRoom.tsx
+InterviewRoom.jsx
+request.http
