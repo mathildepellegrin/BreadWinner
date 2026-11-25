@@ -25,8 +25,8 @@ export function SignupPage() {
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Signup failed');
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || data.detail || 'Signup failed');
       }
 
       const data = await response.json();

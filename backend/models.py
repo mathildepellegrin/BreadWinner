@@ -43,6 +43,9 @@ class JobApplication(Base):
     requirements = Column(JSON, nullable=True)
     benefits = Column(JSON, nullable=True)
     url = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    salary = Column(String, nullable=True)
+    interview_date = Column(String, nullable=True)
     status = Column(String, default="Applied")  # Applied, Interviewing, Rejected, Offer
     match_score = Column(Integer, nullable=True)
     gaps = Column(JSON, nullable=True)

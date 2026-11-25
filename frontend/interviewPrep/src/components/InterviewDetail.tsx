@@ -1,6 +1,6 @@
 import { Link, useParams, useNavigate } from 'react-router';
-import { Brain, ArrowLeft, Calendar, Briefcase, MapPin, DollarSign, Play, Building2, FileText, CheckSquare, Loader2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Brain, ArrowLeft, Calendar, Briefcase, MapPin, DollarSign, Play, Building2, FileText, CheckSquare, Loader2, RefreshCw, AlertCircle, Target } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
 
 type TopicCategory = 'technical' | 'behavioral' | 'leetcode';
 
@@ -14,6 +14,9 @@ interface JobDetail {
   status: string;
   location: string | null;
   salary: string | null;
+  interview_date: string | null;
+  matchScore: number | null;
+  gaps: string[] | null;
   created_at: string;
 }
 
@@ -23,14 +26,94 @@ interface PrepMaterials {
   leetcode_topics: string[];
 }
 
+interface JobAnalysis {
+  matchScore: number | null;
+  gaps: string[];
+  strengths?: string[];
+}
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export function InterviewDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [selectedCategory, setSelectedCategory] = useState<TopicCategory>('technical');
   const [job, setJob] = useState<JobDetail | null>(null);
   const [prepMaterials, setPrepMaterials] = useState<PrepMaterials | null>(null);
+  const [prepError, setPrepError] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<JobAnalysis | null>(null);
+  const [analysisNote, setAnalysisNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingPrep, setLoadingPrep] = useState(false);
+  const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+
+  const loadPrepMaterials = useCallback(async (jobId: number) => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setLoadingPrep(true);
+    setPrepError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/prep/materials`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ job_id: jobId })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        localStorage.removeItem('token');
+        navigate('/login');
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || 'Failed to generate study materials');
+      }
+      setPrepMaterials(data);
+    } catch (err) {
+      console.error('Failed to load prep materials', err);
+      setPrepMaterials(null);
+      setPrepError(err instanceof Error ? err.message : 'Failed to load study materials');
+    } finally {
+      setLoadingPrep(false);
+    }
+  }, [navigate]);
+
+  const loadJobAnalysis = useCallback(async (jobId: number) => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setLoadingAnalysis(true);
+    setAnalysisNote(null);
+    try {
+      const res = await fetch(`${API_URL}/api/jobs/${jobId}/analysis`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        localStorage.removeItem('token');
+        navigate('/login');
+        return;
+      }
+      if (res.status === 400) {
+        setAnalysisNote(data.error || data.detail || 'Upload a CV or fill out your Profile to see your match score.');
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || 'Failed to analyze match score');
+      }
+      setAnalysis({
+        matchScore: data.matchScore ?? null,
+        gaps: Array.isArray(data.gaps) ? data.gaps : [],
+        strengths: Array.isArray(data.strengths) ? data.strengths : undefined,
+      });
+    } catch (err) {
+      console.error('Failed to load job analysis', err);
+    } finally {
+      setLoadingAnalysis(false);
+    }
+  }, [navigate]);
 
   useEffect(() => {
     const fetchJob = async () => {
@@ -41,30 +124,29 @@ export function InterviewDetail() {
           return;
         }
 
-        // Fetch Job Details
-        const jobRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs/${id}`, {
+        const jobRes = await fetch(`${API_URL}/api/jobs/${id}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        
+
+        if (jobRes.status === 401) {
+          localStorage.removeItem('token');
+          navigate('/login');
+          return;
+        }
         if (!jobRes.ok) throw new Error('Job not found');
-        const jobData = await jobRes.json();
+        const jobData: JobDetail = await jobRes.json();
         setJob(jobData);
 
-        // Fetch Prep Materials (async, don't block UI)
-        setLoadingPrep(true);
-        fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/prep/materials`, {
-          method: 'POST',
-          headers: { 
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ job_id: jobData.id })
-        })
-        .then(res => res.json())
-        .then(data => setPrepMaterials(data))
-        .catch(err => console.error('Failed to load prep materials', err))
-        .finally(() => setLoadingPrep(false));
+        if (jobData.matchScore !== null && jobData.matchScore !== undefined) {
+          setAnalysis({
+            matchScore: jobData.matchScore,
+            gaps: Array.isArray(jobData.gaps) ? jobData.gaps : [],
+          });
+        } else {
+          void loadJobAnalysis(jobData.id);
+        }
 
+        void loadPrepMaterials(jobData.id);
       } catch (error) {
         console.error(error);
       } finally {
@@ -73,7 +155,7 @@ export function InterviewDetail() {
     };
 
     if (id) fetchJob();
-  }, [id, navigate]);
+  }, [id, navigate, loadPrepMaterials, loadJobAnalysis]);
 
   if (loading) {
     return (
@@ -100,11 +182,25 @@ export function InterviewDetail() {
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return dateStr;
     return date.toLocaleDateString('en-US', {
       month: 'long',
       day: 'numeric',
       year: 'numeric',
     });
+  };
+
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status) {
+      case 'Offer':
+        return 'bg-[#dafbe1] text-[#1a7f37] border-[#1a7f37]/30';
+      case 'Rejected':
+        return 'bg-[#ffebe9] text-[#cf222e] border-[#cf222e]/30';
+      case 'Interviewing':
+        return 'bg-[#ddf4ff] text-[#0969da] border-[#0969da]/30';
+      default:
+        return 'bg-[#fff8c5] text-[#9a6700] border-[#9a6700]/30';
+    }
   };
 
   const getCurrentTopics = () => {
@@ -148,31 +244,44 @@ export function InterviewDetail() {
       <main className="container mx-auto px-6 py-8 max-w-5xl">
         {/* Job Header */}
         <div className="bg-white border border-[#d0d7de] rounded-lg p-8 mb-8">
-          <div className="flex items-start justify-between mb-6">
+          <div className="flex items-start justify-between mb-6 gap-4">
             <div>
               <h1 className="text-3xl font-bold text-[#1f2328] mb-2">
                 {job.title}
               </h1>
               <p className="text-xl text-[#656d76]">{job.company}</p>
             </div>
-            <span
-              className={`px-4 py-2 rounded-md text-sm font-medium border ${
-                job.status === 'Offer' || job.status === 'Rejected'
-                  ? 'bg-[#dafbe1] text-[#1a7f37] border-[#1a7f37]/30'
-                  : 'bg-[#fff8c5] text-[#9a6700] border-[#9a6700]/30'
-              }`}
-            >
-              {job.status}
-            </span>
+            <div className="flex items-center gap-2">
+              {analysis?.matchScore !== null && analysis?.matchScore !== undefined && (
+                <span
+                  className={`px-4 py-2 rounded-md text-sm font-medium border ${
+                    analysis.matchScore >= 80
+                      ? 'bg-[#dafbe1] text-[#1a7f37] border-[#1a7f37]/30'
+                      : analysis.matchScore >= 50
+                        ? 'bg-[#fff8c5] text-[#9a6700] border-[#9a6700]/30'
+                        : 'bg-[#ffebe9] text-[#cf222e] border-[#cf222e]/30'
+                  }`}
+                >
+                  {analysis.matchScore}% Match
+                </span>
+              )}
+              <span
+                className={`px-4 py-2 rounded-md text-sm font-medium border ${getStatusBadgeStyle(job.status)}`}
+              >
+                {job.status}
+              </span>
+            </div>
           </div>
 
           <div className="grid md:grid-cols-2 gap-6 mb-6">
             <div className="flex items-center gap-3">
               <Calendar className="size-5 text-[#656d76]" />
               <div>
-                <p className="text-sm text-[#656d76]">Applied Date</p>
+                <p className="text-sm text-[#656d76]">
+                  {job.interview_date ? 'Interview Date' : 'Applied Date'}
+                </p>
                 <p className="font-medium text-[#1f2328]">
-                  {formatDate(job.created_at)}
+                  {formatDate(job.interview_date || job.created_at)}
                 </p>
               </div>
             </div>
@@ -203,11 +312,54 @@ export function InterviewDetail() {
 
           <button
             onClick={() => navigate(`/simulate/${job.id}`)}
-            className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-medium transition-colors"
+            className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] font-medium transition-colors cursor-pointer"
           >
             <Play className="size-5" />
             Start AI Mock Interview
           </button>
+        </div>
+
+        {/* Resume Match & Skill Gaps */}
+        <div className="bg-white border border-[#d0d7de] rounded-lg p-6 mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <Target className="size-5 text-[#0969da]" />
+            <h2 className="text-xl font-semibold text-[#1f2328]">Resume Match & Gap Analysis</h2>
+          </div>
+          {loadingAnalysis ? (
+            <div className="flex items-center gap-2 text-[#0969da] py-2">
+              <Loader2 className="size-5 animate-spin" />
+              <span>Analyzing your profile against this role...</span>
+            </div>
+          ) : analysisNote ? (
+            <p className="text-sm text-[#656d76]">
+              {analysisNote}{' '}
+              <Link to="/profile" className="text-[#0969da] hover:underline font-medium">
+                Go to Profile
+              </Link>
+            </p>
+          ) : analysis ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-[#656d76]">Match Score:</span>
+                <span className="font-bold text-lg text-[#1f2328]">{analysis.matchScore}%</span>
+              </div>
+              {analysis.gaps.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-[#1f2328] mb-2">Key Skill Gaps to Brush Up On:</p>
+                  <ul className="space-y-2">
+                    {analysis.gaps.map((gap, index) => (
+                      <li key={index} className="flex items-start gap-2 text-sm text-[#1f2328]">
+                        <span className="text-[#9a6700] mt-0.5">•</span>
+                        <span>{gap}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-[#656d76]">Match analysis unavailable right now.</p>
+          )}
         </div>
 
         {/* Job Listing Summary */}
@@ -274,7 +426,7 @@ export function InterviewDetail() {
           <div className="flex gap-2 border-b border-[#d0d7de]">
             <button
               onClick={() => setSelectedCategory('technical')}
-              className={`px-4 py-2 font-medium transition-colors border-b-2 ${
+              className={`px-4 py-2 font-medium transition-colors border-b-2 cursor-pointer ${
                 selectedCategory === 'technical'
                   ? 'border-[#0969da] text-[#0969da]'
                   : 'border-transparent text-[#656d76] hover:text-[#1f2328]'
@@ -284,7 +436,7 @@ export function InterviewDetail() {
             </button>
             <button
               onClick={() => setSelectedCategory('behavioral')}
-              className={`px-4 py-2 font-medium transition-colors border-b-2 ${
+              className={`px-4 py-2 font-medium transition-colors border-b-2 cursor-pointer ${
                 selectedCategory === 'behavioral'
                   ? 'border-[#8250df] text-[#8250df]'
                   : 'border-transparent text-[#656d76] hover:text-[#1f2328]'
@@ -294,7 +446,7 @@ export function InterviewDetail() {
             </button>
             <button
               onClick={() => setSelectedCategory('leetcode')}
-              className={`px-4 py-2 font-medium transition-colors border-b-2 ${
+              className={`px-4 py-2 font-medium transition-colors border-b-2 cursor-pointer ${
                 selectedCategory === 'leetcode'
                   ? 'border-[#9a6700] text-[#9a6700]'
                   : 'border-transparent text-[#656d76] hover:text-[#1f2328]'
@@ -314,6 +466,20 @@ export function InterviewDetail() {
             {loadingPrep ? (
               <div className="flex items-center justify-center py-8 text-[#0969da]">
                 <Loader2 className="size-6 animate-spin mr-2" /> Generating personalized study plan...
+              </div>
+            ) : prepError ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-center">
+                <div className="flex items-center gap-2 text-[#cf222e] text-sm font-medium">
+                  <AlertCircle className="size-5" />
+                  <span>{prepError}</span>
+                </div>
+                <button
+                  onClick={() => loadPrepMaterials(job.id)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-[#f6f8fa] hover:bg-[#eaeef2] border border-[#d0d7de] rounded-md text-sm font-medium text-[#1f2328] cursor-pointer"
+                >
+                  <RefreshCw className="size-4" />
+                  Retry
+                </button>
               </div>
             ) : currentTopics.length > 0 ? (
               <div className="grid gap-3">

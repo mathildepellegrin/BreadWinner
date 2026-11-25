@@ -21,7 +21,7 @@ import crud
 import hashlib
 from firecrawl import FirecrawlApp
 import io
-import fitz # PyMuPDF
+import pymupdf
 from docx import Document
 from mangum import Mangum
 
@@ -79,6 +79,15 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE users ADD COLUMN skills TEXT"))
                 conn.execute(text("ALTER TABLE users ADD COLUMN certifications TEXT"))
                 conn.commit()
+
+            # Check for 'location', 'salary', 'interview_date' columns in 'job_applications'
+            result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='job_applications' AND column_name='location'"))
+            if not result.fetchone():
+                logger.info("Migration: Adding location, salary, interview_date columns to job_applications")
+                conn.execute(text("ALTER TABLE job_applications ADD COLUMN location VARCHAR(255)"))
+                conn.execute(text("ALTER TABLE job_applications ADD COLUMN salary VARCHAR(255)"))
+                conn.execute(text("ALTER TABLE job_applications ADD COLUMN interview_date VARCHAR(50)"))
+                conn.commit()
     except Exception as e:
         logger.error(f"Migration failed: {e}")
 
@@ -89,7 +98,7 @@ class Settings:
     OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
     GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")  # Keep for backward compatibility
     ALLOWED_ORIGINS: List[str] = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
-    MODEL_NAME: str = "google/gemini-2.0-flash-001"
+    MODEL_NAME: str = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     MAX_TEXT_LENGTH: int = 50000
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
     FIRECRAWL_API_KEY: str = os.environ.get("FIRECRAWL_API_KEY", "")
@@ -169,6 +178,7 @@ class JobCreateRequest(BaseModel):
     url: Optional[str] = None
     location: Optional[str] = None
     salary: Optional[str] = None
+    interview_date: Optional[str] = None
 
 class PrepMaterialsRequest(BaseModel):
     job_id: int
@@ -251,7 +261,7 @@ def extract_text_from_file(file_content: bytes, filename: str) -> str:
     text = ""
     try:
         if filename.lower().endswith(".pdf"):
-            with fitz.open(stream=file_content, filetype="pdf") as doc:
+            with pymupdf.open(stream=file_content, filetype="pdf") as doc:
                 for page in doc:
                     text += page.get_text()
         elif filename.lower().endswith(".docx"):
@@ -274,7 +284,13 @@ async def safe_generate_json(prompt: str, max_retries: int = 2) -> Dict[str, Any
                 messages=[{"role": "user", "content": prompt}],
                 response_format={ "type": "json_object" }
             )
-            return json.loads(response.choices[0].message.content)
+            raw = (response.choices[0].message.content or "").strip()
+            if raw.startswith("```"):
+                raw = raw.strip("`")
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            return json.loads(raw)
         except Exception as e:
             logger.error(f"AI generation failed (attempt {attempt + 1}): {e}")
             if attempt == max_retries - 1:
@@ -327,19 +343,17 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Invalid email or password"
         )
     
-    # Verify password exists and matches
-    if not user.password_hash:
+    # Verify password exists and matches (with transparent SHA-256 -> bcrypt upgrade)
+    is_valid, needs_rehash = crud.verify_password(request.password, user.password_hash or "")
+    if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
-    
-    password_hash = hashlib.sha256(request.password.encode()).hexdigest()
-    if user.password_hash != password_hash:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
+
+    if needs_rehash:
+        user.password_hash = crud.hash_password(request.password)
+        db.commit()
     
     token = create_token(user.id)
     
@@ -384,6 +398,14 @@ async def update_profile(
     db: Session = Depends(get_db)
 ):
     """Update user profile details"""
+    # Check if email is already used by another user
+    existing = db.execute(
+        text("SELECT id FROM users WHERE email = :email AND id != :uid"),
+        {"email": profile.email, "uid": current_user.id}
+    ).fetchone()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email is already in use by another account")
+
     # Update using raw SQL
     query = text("""
         UPDATE users 
@@ -643,7 +665,10 @@ async def parse_resume(
     }
 
 @app.post("/api/jobs/parse")
-async def parse_job_details(request: JobParseRequest):
+async def parse_job_details(
+    request: JobParseRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Parse job details from URL without saving"""
     if not (settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY):
         raise HTTPException(status_code=503, detail="AI service not configured")
@@ -665,7 +690,10 @@ async def parse_job_details(request: JobParseRequest):
     return await safe_generate_json(prompt)
 
 @app.post("/api/jobs/auto-fill")
-async def auto_fill_job(request: JobParseRequest):
+async def auto_fill_job(
+    request: JobParseRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Auto-fill job details using Firecrawl for scraping and AI for parsing"""
     if not firecrawl_app:
         raise HTTPException(status_code=503, detail="Firecrawl service not configured")
@@ -720,8 +748,6 @@ async def create_job(
     db: Session = Depends(get_db)
 ):
     """Create a new job application manually"""
-    # Note: We are passing fields supported by the current CRUD. 
-    # If you updated crud.py to support location/salary, add them here.
     job_app = crud.create_job_application(
         db=db,
         user_id=current_user.id,
@@ -730,7 +756,10 @@ async def create_job(
         description=request.description,
         requirements=request.requirements,
         benefits=request.benefits,
-        url=request.url
+        url=request.url,
+        location=request.location,
+        salary=request.salary,
+        interview_date=request.interview_date,
     )
     
     return {
@@ -739,6 +768,9 @@ async def create_job(
         "company": job_app.company,
         "status": job_app.status,
         "url": job_app.url,
+        "location": job_app.location,
+        "salary": job_app.salary,
+        "interview_date": job_app.interview_date,
         "created_at": job_app.created_at
     }
 
@@ -838,16 +870,35 @@ async def get_job_analysis(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if not job.gaps or not job.match_score:
-        # Generate analysis if not present
+    if not job.gaps or job.match_score is None:
+        # Generate analysis if not present — prefer active resume, fall back to saved user profile
         resume = crud.get_active_resume(db, current_user.id)
-        if not resume:
-            raise HTTPException(status_code=400, detail="Active resume required for analysis")
+        candidate_context = None
+        if resume and resume.content:
+            candidate_context = json.dumps(resume.content)
+        else:
+            prof = db.execute(
+                text("SELECT summary, experience, education, skills, certifications FROM users WHERE id = :uid"),
+                {"uid": current_user.id}
+            ).fetchone()
+            if prof and any([prof.summary, prof.experience, prof.education, prof.skills, prof.certifications]):
+                candidate_context = json.dumps({
+                    "summary": prof.summary,
+                    "experience": prof.experience,
+                    "education": prof.education,
+                    "skills": prof.skills,
+                    "certifications": prof.certifications,
+                })
+
+        if not candidate_context:
+            raise HTTPException(status_code=400, detail="Upload a CV or fill out your Profile to calculate match score")
             
         prompt = f"""
-        Perform a gap analysis between this resume and job description.
-        Resume: {json.dumps(resume.content)}
-        Job: {job.description}
+        Perform a gap analysis between this candidate profile/resume and job description.
+        Candidate: {candidate_context}
+        Job Title: {job.title} at {job.company}
+        Job Description: {job.description or ""}
+        Job Requirements: {json.dumps(job.requirements or [])}
         
         Return JSON:
         {{
@@ -1066,9 +1117,10 @@ async def chat_simulation(
         
         # Filter out already asked questions
         asked_texts = [h['content'] for h in history if h['role'] == 'assistant']
+        mode_tokens = [m.strip().lower() for m in (session.mode or "").split(",") if m.strip()]
         available_questions = [
             q for q in cached_questions 
-            if q.text not in asked_texts and (q.category == session.mode or session.mode == "mock")
+            if q.text not in asked_texts and ((q.category or "").lower() in mode_tokens or "mock" in mode_tokens)
         ]
         
         if available_questions:
@@ -1242,6 +1294,7 @@ async def http_exception_handler(request, exc):
         status_code=exc.status_code,
         content={
             "error": exc.detail,
+            "detail": exc.detail,
             "status_code": exc.status_code
         }
     )
@@ -1323,9 +1376,11 @@ async def get_job_detail(
         "status": job.status,
         "url": job.url,
         "created_at": job.created_at,
-        # Safely access potentially missing fields if schema isn't fully updated
         "location": getattr(job, "location", None),
-        "salary": getattr(job, "salary", None)
+        "salary": getattr(job, "salary", None),
+        "interview_date": getattr(job, "interview_date", None),
+        "matchScore": getattr(job, "match_score", None),
+        "gaps": getattr(job, "gaps", None)
     }
 
 @app.get("/api/interviews/history")

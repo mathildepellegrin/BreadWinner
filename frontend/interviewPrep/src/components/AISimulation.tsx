@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useNavigate } from 'react-router';
 import { Brain, ArrowLeft, Loader2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import InterviewRoom from './InterviewRoom';
@@ -7,6 +7,7 @@ type InterviewType = 'technical' | 'behavioral' | 'leetcode';
 
 export function AISimulation() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [hasStarted, setHasStarted] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<InterviewType[]>(['technical']);
   const [isRecording, setIsRecording] = useState(false);
@@ -22,17 +23,26 @@ export function AISimulation() {
   // Fetch real job details
   useEffect(() => {
     const fetchJob = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        navigate('/login');
+        return;
+      }
       if (!id) {
         setLoading(false);
         return;
       }
       
       try {
-        const token = localStorage.getItem('token');
         const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs/${id}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         
+        if (res.status === 401) {
+          localStorage.removeItem('token');
+          navigate('/login');
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           setJob(data);
@@ -45,7 +55,7 @@ export function AISimulation() {
     };
     
     fetchJob();
-  }, [id]);
+  }, [id, navigate]);
 
   useEffect(() => {
     if (hasStarted) {
@@ -112,10 +122,16 @@ export function AISimulation() {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          mode: selectedTypes[0], // Using first selected type for now
+          mode: selectedTypes.join(', '),
           job_id: id ? parseInt(id) : null
         })
       });
+      if (res.status === 401) {
+        localStorage.removeItem('token');
+        navigate('/login');
+        return;
+      }
+      if (!res.ok) throw new Error('Failed to create session');
       const data = await res.json();
       setSessionId(data.session_id);
       setHasStarted(true);

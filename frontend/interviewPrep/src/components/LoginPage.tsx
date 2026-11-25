@@ -24,7 +24,8 @@ export function LoginPage() {
       });
 
       if (!response.ok) {
-        setError('Invalid email or password');
+        const data = await response.json().catch(() => ({}));
+        setError(data.error || data.detail || 'Invalid email or password');
         return;
       }
 

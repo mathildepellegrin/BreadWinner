@@ -1,11 +1,17 @@
 import { Link, useNavigate } from 'react-router';
 import { Brain, ArrowLeft, Link2, Sparkles } from 'lucide-react';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useState, useEffect } from 'react';
 
 export function AddInterview() {
   const navigate = useNavigate();
   const [jobUrl, setJobUrl] = useState('');
   const [isAutoFilling, setIsAutoFilling] = useState(false);
+
+  useEffect(() => {
+    if (!localStorage.getItem('token')) {
+      navigate('/login');
+    }
+  }, [navigate]);
   
   // Form fields
   const [company, setCompany] = useState('');
@@ -34,6 +40,11 @@ export function AddInterview() {
         body: JSON.stringify({ url: jobUrl }),
       });
 
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        navigate('/login');
+        return;
+      }
       if (!response.ok) throw new Error('Failed to parse job');
 
       const data = await response.json();
@@ -73,12 +84,18 @@ export function AddInterview() {
             ...requirements.split('\n').filter(Boolean)
           ],
           benefits: companyValues.split('\n').filter(Boolean),
-          url: jobUrl,
-          location,
-          salary: salaryRange
+          url: jobUrl || null,
+          location: location || null,
+          salary: salaryRange || null,
+          interview_date: interviewDate || null
         }),
       });
 
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        navigate('/login');
+        return;
+      }
       if (!response.ok) throw new Error('Failed to create job');
 
       navigate('/dashboard');

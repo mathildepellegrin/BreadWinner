@@ -91,7 +91,7 @@ export function Profile() {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Failed to upload CV');
+        throw new Error(errorData.error || errorData.detail || 'Failed to upload CV');
       }
 
       const data = await res.json();
@@ -163,11 +163,12 @@ export function Profile() {
       if (res.ok) {
         alert('Profile saved successfully!');
       } else {
-        throw new Error('Failed to save profile');
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.detail || 'Failed to save profile');
       }
     } catch (error) {
       console.error("Error saving profile:", error);
-      alert('Failed to save profile. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to save profile. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -220,14 +221,14 @@ export function Profile() {
             <h2 className="text-xl font-semibold text-[#1f2328]">Upload CV</h2>
           </div>
           <p className="text-[#656d76] mb-4 text-sm">
-            Upload your CV (PDF, DOC, or DOCX) to automatically fill your profile information
+            Upload your CV (PDF, DOCX, or TXT) to automatically fill your profile information
           </p>
           
           <div className="relative">
             <input
               type="file"
               id="cv-upload"
-              accept=".pdf,.doc,.docx"
+              accept=".pdf,.docx,.txt"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -359,7 +360,7 @@ export function Profile() {
                   LinkedIn Profile
                 </label>
                 <input
-                  type="url"
+                  type="text"
                   id="linkedIn"
                   value={linkedIn}
                   onChange={(e) => setLinkedIn(e.target.value)}
@@ -374,7 +375,7 @@ export function Profile() {
                   Portfolio/Website
                 </label>
                 <input
-                  type="url"
+                  type="text"
                   id="portfolio"
                   value={portfolio}
                   onChange={(e) => setPortfolio(e.target.value)}
