@@ -6,6 +6,7 @@ import jwt
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Body, Depends, Security, status, UploadFile, File
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -93,6 +94,7 @@ class Settings:
     FIRECRAWL_API_KEY: str = os.environ.get("FIRECRAWL_API_KEY", "")
     HEYGEN_API_KEY: str = os.environ.get("HEYGEN_API_KEY", "")
     ELEVENLABS_API_KEY: str = os.environ.get("ELEVENLABS_API_KEY", "")
+    ELEVENLABS_VOICE_ID: str = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 
 settings = Settings()
 
@@ -170,6 +172,10 @@ class PrepMaterialsRequest(BaseModel):
 class InterviewChatRequest(BaseModel):
     session_id: int
     user_answer_text: str
+
+class TTSRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2500)
+    voice_id: Optional[str] = None
 
 class InterviewSessionCreateRequest(BaseModel):
     job_id: Optional[int] = None
@@ -926,6 +932,43 @@ async def get_heygen_token(current_user: User = Depends(get_current_user)):
         logger.error(f"HeyGen token fetch failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch streaming token")
 
+@app.post("/api/interviews/tts")
+async def synthesize_speech(
+    request: TTSRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Synthesize AI interviewer voice using ElevenLabs TTS"""
+    if not settings.ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ElevenLabs API key not configured")
+
+    voice_id = request.voice_id or settings.ELEVENLABS_VOICE_ID
+    try:
+        response = requests.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+            headers={
+                "xi-api-key": settings.ELEVENLABS_API_KEY,
+                "Accept": "audio/mpeg",
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": request.text,
+                "model_id": "eleven_turbo_v2_5",
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.75,
+                },
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return Response(content=response.content, media_type="audio/mpeg")
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"ElevenLabs TTS failed: Status {e.response.status_code}, Response: {e.response.text}")
+        raise HTTPException(status_code=502, detail="ElevenLabs TTS generation failed")
+    except Exception as e:
+        logger.error(f"ElevenLabs TTS error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to synthesize speech")
+
 @app.post("/api/interviews/chat")
 async def chat_simulation(
     request: InterviewChatRequest,
@@ -938,8 +981,8 @@ async def chat_simulation(
         raise HTTPException(status_code=404, detail="Session not found")
     
     # 1. Update transcript with user answer
-    history = list(session.transcript)
-    if history and history[-1]['role'] == 'assistant':
+    history = list(session.transcript or [])
+    if not history or history[-1]['role'] == 'assistant':
         history.append({"role": "user", "content": request.user_answer_text})
     
     # 2. AI Analysis
@@ -991,8 +1034,11 @@ async def chat_simulation(
         else:
             # Generate generic next question if cache exhausted
             gen_prompt = f"Generate a challenging {session.mode} interview question for {job_title} at {company_name}."
-            gen_res = await safe_generate_json(f"Return JSON {{ 'question': '...' }} based on: {gen_prompt}")
+            gen_res = await safe_generate_json(f'Return JSON {{"question": "..."}} based on: {gen_prompt}')
             next_question_text = gen_res.get("question")
+
+    if not next_question_text:
+        next_question_text = "Could you walk me through a challenging technical project you worked on recently?"
 
     # 3. Update transcript with AI question
     history.append({"role": "assistant", "content": next_question_text})
