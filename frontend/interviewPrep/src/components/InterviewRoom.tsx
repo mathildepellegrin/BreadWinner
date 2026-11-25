@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { LiveAvatarSession, SessionEvent, AgentEventsEnum } from '@heygen/liveavatar-web-sdk';
 import { Mic, MicOff, Video, VideoOff, Phone, Brain, Volume2, VolumeX, Send, Loader2 } from 'lucide-react';
 
 interface InterviewRoomProps {
@@ -11,6 +12,7 @@ const GREETING_TEXT =
   "Hello! I'm your HireSync AI interviewer. Let's begin. Please introduce yourself and tell me a bit about your background.";
 
 export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProps) {
+  const [avatarMode, setAvatarMode] = useState<'connecting' | 'liveavatar' | 'voice_only'>('connecting');
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
@@ -20,6 +22,9 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [transcript, setTranscript] = useState<{ role: 'ai' | 'user'; text: string }[]>([]);
 
+  const avatarVideoRef = useRef<HTMLVideoElement>(null);
+  const avatarSessionRef = useRef<LiveAvatarSession | null>(null);
+  const avatarModeRef = useRef<'connecting' | 'liveavatar' | 'voice_only'>('connecting');
   const userVideoRef = useRef<HTMLVideoElement>(null);
   const recognitionRef = useRef<any>(null);
   const userStreamRef = useRef<MediaStream | null>(null);
@@ -29,18 +34,30 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const isMountedRef = useRef(true);
   const isMutedRef = useRef(false);
   const lastAITextRef = useRef<string>(GREETING_TEXT);
+  const greetedRef = useRef(false);
+
+  const updateAvatarMode = (mode: 'connecting' | 'liveavatar' | 'voice_only') => {
+    avatarModeRef.current = mode;
+    if (isMountedRef.current) {
+      setAvatarMode(mode);
+    }
+  };
 
   useEffect(() => {
     isMutedRef.current = isMuted;
     if (audioRef.current) {
       audioRef.current.muted = isMuted;
     }
+    if (avatarVideoRef.current) {
+      avatarVideoRef.current.muted = isMuted;
+    }
   }, [isMuted]);
 
   useEffect(() => {
     isMountedRef.current = true;
+    greetedRef.current = false;
     initUserCamera();
-    handleAIResponse(GREETING_TEXT);
+    initLiveAvatar();
 
     return () => {
       isMountedRef.current = false;
@@ -72,6 +89,13 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
+    if (avatarSessionRef.current && avatarModeRef.current === 'liveavatar') {
+      try {
+        avatarSessionRef.current.interrupt();
+      } catch {
+        // Ignore if not currently speaking
+      }
+    }
     setIsSpeaking(false);
   };
 
@@ -88,12 +112,127 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     setIsListening(false);
   };
 
+  const stopAvatarSession = async () => {
+    const session = avatarSessionRef.current;
+    avatarSessionRef.current = null;
+    if (session) {
+      try {
+        await session.stop();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  };
+
   const cleanupMedia = () => {
     stopAudio();
     stopListening();
+    void stopAvatarSession();
     if (userStreamRef.current) {
       userStreamRef.current.getTracks().forEach((track) => track.stop());
       userStreamRef.current = null;
+    }
+  };
+
+  const triggerInitialGreeting = () => {
+    if (greetedRef.current || !isMountedRef.current) return;
+    greetedRef.current = true;
+    void handleAIResponse(GREETING_TEXT);
+  };
+
+  const fallbackToVoiceOnly = (reason?: string) => {
+    if (reason) {
+      console.warn('Falling back to ElevenLabs voice-only mode:', reason);
+    }
+    void stopAvatarSession();
+    updateAvatarMode('voice_only');
+    triggerInitialGreeting();
+  };
+
+  const initLiveAvatar = async () => {
+    let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/interviews/token`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        fallbackToVoiceOnly(`Token endpoint returned ${res.status}`);
+        return;
+      }
+
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+
+      if (data.mode !== 'liveavatar' || !data.session_token) {
+        fallbackToVoiceOnly(data.reason || 'LiveAvatar unavailable');
+        return;
+      }
+
+      const session = new LiveAvatarSession(data.session_token, {
+        autoKeepAlive: true,
+      });
+      avatarSessionRef.current = session;
+
+      // Safety timeout so UI never hangs if WebRTC cannot connect
+      connectTimeout = setTimeout(() => {
+        if (isMountedRef.current && avatarModeRef.current === 'connecting') {
+          fallbackToVoiceOnly('LiveAvatar stream connection timed out');
+        }
+      }, 15000);
+
+      session.on(SessionEvent.SESSION_STREAM_READY, () => {
+        if (connectTimeout) {
+          clearTimeout(connectTimeout);
+          connectTimeout = null;
+        }
+        if (!isMountedRef.current) return;
+
+        if (avatarVideoRef.current) {
+          session.attach(avatarVideoRef.current);
+          avatarVideoRef.current.muted = isMutedRef.current;
+          avatarVideoRef.current.play().catch((err) => {
+            console.warn('Avatar video autoplay blocked:', err);
+            if (isMountedRef.current) setAudioBlocked(true);
+          });
+        }
+        updateAvatarMode('liveavatar');
+        triggerInitialGreeting();
+      });
+
+      session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, () => {
+        if (isMountedRef.current) setIsSpeaking(true);
+      });
+
+      session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, () => {
+        if (isMountedRef.current) {
+          setIsSpeaking(false);
+          startListening();
+        }
+      });
+
+      session.on(SessionEvent.SESSION_DISCONNECTED, (reason) => {
+        if (connectTimeout) {
+          clearTimeout(connectTimeout);
+          connectTimeout = null;
+        }
+        if (!isMountedRef.current) return;
+        console.warn('LiveAvatar session disconnected:', reason);
+        avatarSessionRef.current = null;
+        updateAvatarMode('voice_only');
+        setIsSpeaking(false);
+        triggerInitialGreeting();
+      });
+
+      await session.start();
+    } catch (err) {
+      if (connectTimeout) {
+        clearTimeout(connectTimeout);
+      }
+      if (isMountedRef.current) {
+        fallbackToVoiceOnly(err instanceof Error ? err.message : 'LiveAvatar start failed');
+      }
     }
   };
 
@@ -152,6 +291,41 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     }
   };
 
+  const speakWithLiveAvatar = async (text: string): Promise<boolean> => {
+    const session = avatarSessionRef.current;
+    if (!session || avatarModeRef.current !== 'liveavatar') return false;
+
+    try {
+      setIsSpeaking(true);
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/interviews/tts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text, output_format: 'pcm_24000' }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`PCM TTS failed with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (!isMountedRef.current) return true;
+      if (!data.audio_base64 || !avatarSessionRef.current || avatarModeRef.current !== 'liveavatar') {
+        return false;
+      }
+
+      avatarSessionRef.current.repeatAudio(data.audio_base64);
+      return true;
+    } catch (error) {
+      console.error('LiveAvatar repeatAudio error, falling back to audio playback:', error);
+      setIsSpeaking(false);
+      return false;
+    }
+  };
+
   const playElevenLabsSpeech = async (text: string) => {
     stopAudio();
     stopListening();
@@ -171,7 +345,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, output_format: 'mp3' }),
       });
 
       if (!res.ok) {
@@ -314,7 +488,23 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
   const handleAIResponse = async (text: string) => {
     lastAITextRef.current = text;
     setTranscript((prev) => [...prev, { role: 'ai', text }]);
+    stopListening();
+
+    if (avatarModeRef.current === 'liveavatar' && avatarSessionRef.current) {
+      const ok = await speakWithLiveAvatar(text);
+      if (ok) return;
+    }
     await playElevenLabsSpeech(text);
+  };
+
+  const handleEnableAudioClick = () => {
+    setAudioBlocked(false);
+    if (avatarVideoRef.current && avatarModeRef.current === 'liveavatar') {
+      avatarVideoRef.current.muted = false;
+      avatarVideoRef.current.play().catch(() => {});
+    } else {
+      void playElevenLabsSpeech(lastAITextRef.current);
+    }
   };
 
   const handleTextSubmit = (e: React.FormEvent) => {
@@ -344,59 +534,81 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     onFinish();
   };
 
-  const statusLabel = isThinking
-    ? 'Thinking...'
-    : isSpeaking
-      ? 'Speaking'
-      : isListening
-        ? 'Listening to you...'
-        : 'Ready';
+  const statusLabel =
+    avatarMode === 'connecting'
+      ? 'Connecting Avatar...'
+      : isThinking
+        ? 'Thinking...'
+        : isSpeaking
+          ? 'Speaking'
+          : isListening
+            ? 'Listening to you...'
+            : 'Ready';
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0d1117] flex justify-center overflow-hidden h-[100dvh]">
       <div className="w-full max-w-3xl h-full flex flex-col p-4 gap-4">
         {/* Top Stage Row */}
-        <div className="flex-none w-full flex flex-row gap-4 h-[30vh] min-h-[160px] max-h-[360px]">
-          {/* AI Interviewer Voice Stage */}
-          <div className="flex-1 bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden relative flex flex-col items-center justify-center p-4">
-            <div className="relative flex items-center justify-center">
-              {isSpeaking && (
-                <div className="absolute size-28 rounded-full bg-[#1f6feb]/25 animate-ping" />
-              )}
-              <div
-                className={`size-24 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                  isSpeaking
-                    ? 'bg-[#1f6feb]/30 border-[#58a6ff] scale-110'
-                    : isThinking
-                      ? 'bg-[#8250df]/20 border-[#bc8cff]'
-                      : isListening
-                        ? 'bg-[#238636]/20 border-[#3fb950]'
-                        : 'bg-[#0d1117] border-gray-700'
-                }`}
-              >
-                {isThinking ? (
-                  <Loader2 className="size-10 text-[#bc8cff] animate-spin" />
-                ) : (
-                  <Brain
-                    className={`size-10 transition-colors ${
-                      isSpeaking
-                        ? 'text-[#58a6ff]'
-                        : isListening
-                          ? 'text-[#3fb950]'
-                          : 'text-gray-300'
-                    }`}
-                  />
-                )}
+        <div className="flex-none w-full flex flex-row gap-4 h-[32vh] min-h-[170px] max-h-[380px]">
+          {/* AI Interviewer Avatar / Voice Stage */}
+          <div className="flex-1 bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden relative flex flex-col items-center justify-center">
+            <video
+              ref={avatarVideoRef}
+              autoPlay
+              playsInline
+              muted={isMuted}
+              className={`w-full h-full object-cover ${avatarMode === 'liveavatar' ? '' : 'hidden'}`}
+            />
+
+            {avatarMode === 'connecting' && (
+              <div className="flex flex-col items-center gap-3 text-white p-4">
+                <Loader2 className="size-8 text-[#58a6ff] animate-spin" />
+                <span className="text-sm text-gray-300">Connecting AI Interviewer...</span>
               </div>
-            </div>
+            )}
+
+            {avatarMode === 'voice_only' && (
+              <div className="flex flex-col items-center justify-center p-4">
+                <div className="relative flex items-center justify-center">
+                  {isSpeaking && (
+                    <div className="absolute size-28 rounded-full bg-[#1f6feb]/25 animate-ping" />
+                  )}
+                  <div
+                    className={`size-24 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                      isSpeaking
+                        ? 'bg-[#1f6feb]/30 border-[#58a6ff] scale-110'
+                        : isThinking
+                          ? 'bg-[#8250df]/20 border-[#bc8cff]'
+                          : isListening
+                            ? 'bg-[#238636]/20 border-[#3fb950]'
+                            : 'bg-[#0d1117] border-gray-700'
+                    }`}
+                  >
+                    {isThinking ? (
+                      <Loader2 className="size-10 text-[#bc8cff] animate-spin" />
+                    ) : (
+                      <Brain
+                        className={`size-10 transition-colors ${
+                          isSpeaking
+                            ? 'text-[#58a6ff]'
+                            : isListening
+                              ? 'text-[#3fb950]'
+                              : 'text-gray-300'
+                        }`}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {audioBlocked && (
               <button
-                onClick={() => playElevenLabsSpeech(lastAITextRef.current)}
-                className="mt-4 px-3 py-1.5 bg-[#1f6feb] hover:bg-[#388bfd] text-white text-xs font-medium rounded-md flex items-center gap-1.5 cursor-pointer"
+                onClick={handleEnableAudioClick}
+                className="absolute top-3 right-3 px-3 py-1.5 bg-[#1f6feb] hover:bg-[#388bfd] text-white text-xs font-medium rounded-md flex items-center gap-1.5 cursor-pointer"
               >
                 <Volume2 className="size-3.5" />
-                Tap to play voice
+                Tap to enable audio
               </button>
             )}
 
@@ -407,7 +619,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
                     ? 'bg-[#58a6ff] animate-pulse'
                     : isListening
                       ? 'bg-[#3fb950] animate-pulse'
-                      : isThinking
+                      : isThinking || avatarMode === 'connecting'
                         ? 'bg-[#bc8cff] animate-pulse'
                         : 'bg-gray-400'
                 }`}
@@ -444,7 +656,11 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
               <Brain className="size-4 text-[#58a6ff]" />
               <span className="text-white font-semibold text-sm">Live Transcript</span>
             </div>
-            <span className="text-xs text-gray-400">Powered by ElevenLabs Voice</span>
+            <span className="text-xs text-gray-400">
+              {avatarMode === 'liveavatar'
+                ? 'LiveAvatar Video + ElevenLabs Voice'
+                : 'ElevenLabs Voice Mode'}
+            </span>
           </div>
 
           <div ref={transcriptRef} className="flex-1 overflow-y-auto p-4 space-y-3 scroll-smooth">

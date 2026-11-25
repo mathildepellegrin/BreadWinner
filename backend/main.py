@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import base64
 import requests
 import jwt
 from datetime import datetime, timedelta
@@ -93,6 +94,9 @@ class Settings:
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "hackathon-secret-key-2026")
     FIRECRAWL_API_KEY: str = os.environ.get("FIRECRAWL_API_KEY", "")
     HEYGEN_API_KEY: str = os.environ.get("HEYGEN_API_KEY", "")
+    LIVEAVATAR_API_KEY: str = os.environ.get("LIVEAVATAR_API_KEY", "")
+    LIVEAVATAR_AVATAR_ID: str = os.environ.get("LIVEAVATAR_AVATAR_ID", "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a")
+    LIVEAVATAR_SANDBOX: bool = os.environ.get("LIVEAVATAR_SANDBOX", "false").lower() == "true"
     ELEVENLABS_API_KEY: str = os.environ.get("ELEVENLABS_API_KEY", "")
     ELEVENLABS_VOICE_ID: str = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 
@@ -176,6 +180,7 @@ class InterviewChatRequest(BaseModel):
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=2500)
     voice_id: Optional[str] = None
+    output_format: str = Field(default="mp3", pattern="^(mp3|pcm_24000)$")
 
 class InterviewSessionCreateRequest(BaseModel):
     job_id: Optional[int] = None
@@ -905,51 +910,78 @@ async def get_question(
     return await safe_generate_json(prompt)
 
 @app.get("/api/interviews/token")
-async def get_heygen_token(current_user: User = Depends(get_current_user)):
-    """Fetch HeyGen streaming token"""
-    if not settings.HEYGEN_API_KEY:
-        raise HTTPException(status_code=503, detail="HeyGen API key not configured")
-    
+async def get_liveavatar_token(
+    sandbox: Optional[bool] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Fetch HeyGen LiveAvatar LITE session token, falling back cleanly to voice-only if unavailable"""
+    if not settings.LIVEAVATAR_API_KEY:
+        return {"mode": "voice_only", "reason": "LiveAvatar API key not configured"}
+
+    use_sandbox = settings.LIVEAVATAR_SANDBOX if sandbox is None else sandbox
+    payload = {
+        "mode": "LITE",
+        "avatar_id": settings.LIVEAVATAR_AVATAR_ID,
+        "is_sandbox": use_sandbox,
+    }
     try:
-        # HeyGen requires a POST request with an empty body to create token
         response = requests.post(
-            "https://api.heygen.com/v1/streaming.create_token",
+            "https://api.liveavatar.com/v1/sessions/token",
             headers={
-                "X-Api-Key": settings.HEYGEN_API_KEY,
-                "Content-Type": "application/json"
+                "X-API-KEY": settings.LIVEAVATAR_API_KEY,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
             },
-            json={}  # Empty JSON body
+            json=payload,
+            timeout=15,
         )
-        response.raise_for_status()
-        heygen_data = response.json()
-        logger.info(f"HeyGen token creation successful: {heygen_data}")
-        # Return the full response from HeyGen
-        return heygen_data
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HeyGen token creation failed: Status {e.response.status_code}, Response: {e.response.text}")
-        raise HTTPException(status_code=500, detail=f"HeyGen token creation failed: {e.response.text}")
+        data = response.json() if response.content else {}
+        session_token = (data.get("data") or {}).get("session_token")
+        session_id = (data.get("data") or {}).get("session_id")
+        if response.ok and session_token:
+            return {
+                "mode": "liveavatar",
+                "session_token": session_token,
+                "session_id": session_id,
+                "is_sandbox": use_sandbox,
+            }
+
+        logger.warning(f"LiveAvatar token unavailable (status={response.status_code}): {data}")
+        return {
+            "mode": "voice_only",
+            "reason": data.get("message") or f"LiveAvatar unavailable (HTTP {response.status_code})",
+        }
     except Exception as e:
-        logger.error(f"HeyGen token fetch failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch streaming token")
+        logger.error(f"LiveAvatar token fetch failed: {e}")
+        return {"mode": "voice_only", "reason": "LiveAvatar temporarily unavailable"}
 
 @app.post("/api/interviews/tts")
 async def synthesize_speech(
     request: TTSRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """Synthesize AI interviewer voice using ElevenLabs TTS"""
+    """Synthesize AI interviewer voice using ElevenLabs TTS (MP3 for voice-only or PCM 24kHz for LiveAvatar LITE)"""
     if not settings.ELEVENLABS_API_KEY:
         raise HTTPException(status_code=503, detail="ElevenLabs API key not configured")
 
     voice_id = request.voice_id or settings.ELEVENLABS_VOICE_ID
+    is_pcm = request.output_format == "pcm_24000"
+    url = (
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_24000"
+        if is_pcm
+        else f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    )
+    headers = {
+        "xi-api-key": settings.ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+    }
+    if not is_pcm:
+        headers["Accept"] = "audio/mpeg"
+
     try:
         response = requests.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-            headers={
-                "xi-api-key": settings.ELEVENLABS_API_KEY,
-                "Accept": "audio/mpeg",
-                "Content-Type": "application/json",
-            },
+            url,
+            headers=headers,
             json={
                 "text": request.text,
                 "model_id": "eleven_turbo_v2_5",
@@ -961,6 +993,16 @@ async def synthesize_speech(
             timeout=30,
         )
         response.raise_for_status()
+        if is_pcm:
+            pcm_bytes = response.content
+            # Pad to multiple of 6 bytes (3 samples * 2 bytes) so 960-char base64 chunks stay aligned
+            rem = len(pcm_bytes) % 6
+            if rem:
+                pcm_bytes += b"\x00" * (6 - rem)
+            return {
+                "audio_base64": base64.b64encode(pcm_bytes).decode("ascii"),
+                "format": "pcm_24000",
+            }
         return Response(content=response.content, media_type="audio/mpeg")
     except requests.exceptions.HTTPError as e:
         logger.error(f"ElevenLabs TTS failed: Status {e.response.status_code}, Response: {e.response.text}")
