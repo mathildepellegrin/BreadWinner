@@ -41,4 +41,8 @@ export const router = createBrowserRouter([
     path: "/simulate/:id",
     Component: AISimulation,
   },
+  {
+    path: "*",
+    Component: LandingPage,
+  },
 ]);

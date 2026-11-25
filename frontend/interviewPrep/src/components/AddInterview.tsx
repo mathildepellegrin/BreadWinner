@@ -54,8 +54,8 @@ export function AddInterview() {
       setLocation(data.location || '');
       setSalaryRange(data.salary_range || '');
       setDescription(data.description || '');
-      setRequirements((data.requirements || []).join('\n'));
-      setCompanyValues((data.benefits || []).join('\n'));
+      setRequirements(Array.isArray(data.requirements) ? data.requirements.join('\n') : (data.requirements || ''));
+      setCompanyValues(Array.isArray(data.benefits) ? data.benefits.join('\n') : (data.benefits || ''));
     } catch (error) {
       console.error('Auto-fill failed:', error);
       alert('Failed to auto-fill details. Please try again.');
@@ -111,10 +111,10 @@ export function AddInterview() {
       <header className="bg-white border-b border-[#d0d7de]">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <Link to="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <Brain className="size-8 text-[#0969da]" />
               <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
-            </div>
+            </Link>
             <Link
               to="/dashboard"
               className="flex items-center gap-2 text-[#656d76] hover:text-[#1f2328] transition-colors"
@@ -158,6 +158,7 @@ export function AddInterview() {
               />
             </div>
             <button
+              type="button"
               onClick={handleAutoFill}
               disabled={!jobUrl.trim() || isAutoFilling}
               className="px-6 py-2 bg-[#9a6700] text-white rounded-md hover:bg-[#b87900] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"

@@ -2,28 +2,41 @@ import { Link } from 'react-router';
 import { Brain, Target, Mic, CheckCircle } from 'lucide-react';
 
 export function LandingPage() {
+  const isLoggedIn = Boolean(localStorage.getItem('token'));
+
   return (
     <div className="min-h-screen bg-[#f6f8fa]">
       {/* Navigation */}
       <nav className="container mx-auto px-6 py-4 border-b border-[#d0d7de]">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <Link to={isLoggedIn ? '/dashboard' : '/'} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <Brain className="size-8 text-[#0969da]" />
             <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
-          </div>
+          </Link>
           <div className="flex gap-4">
-            <Link
-              to="/login"
-              className="px-4 py-2 text-[#656d76] hover:text-[#1f2328] transition-colors"
-            >
-              Log In
-            </Link>
-            <Link
-              to="/signup"
-              className="px-6 py-2 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] transition-colors"
-            >
-              Sign Up
-            </Link>
+            {isLoggedIn ? (
+              <Link
+                to="/dashboard"
+                className="px-6 py-2 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] transition-colors"
+              >
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  to="/login"
+                  className="px-4 py-2 text-[#656d76] hover:text-[#1f2328] transition-colors"
+                >
+                  Log In
+                </Link>
+                <Link
+                  to="/signup"
+                  className="px-6 py-2 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] transition-colors"
+                >
+                  Sign Up
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -39,10 +52,10 @@ export function LandingPage() {
             personalized feedback to land your dream job.
           </p>
           <Link
-            to="/signup"
+            to={isLoggedIn ? '/dashboard' : '/signup'}
             className="inline-block px-8 py-4 bg-[#1a7f37] text-white rounded-md hover:bg-[#1f883d] text-lg font-semibold transition-colors"
           >
-            Get Started Free
+            {isLoggedIn ? 'Open Dashboard' : 'Get Started Free'}
           </Link>
         </div>
       </section>

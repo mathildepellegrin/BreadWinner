@@ -549,7 +549,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
     <div className="fixed inset-0 z-50 bg-[#0d1117] flex justify-center overflow-hidden h-[100dvh]">
       <div className="w-full max-w-3xl h-full flex flex-col p-4 gap-4">
         {/* Top Stage Row */}
-        <div className="flex-none w-full flex flex-row gap-4 h-[32vh] min-h-[170px] max-h-[380px]">
+        <div className="flex-none w-full flex flex-row gap-4 h-[36vh] min-h-[200px] max-h-[400px]">
           {/* AI Interviewer Avatar / Voice Stage */}
           <div className="flex-1 bg-[#161b22] border border-gray-800 rounded-lg overflow-hidden relative flex flex-col items-center justify-center">
             <video
@@ -557,7 +557,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
               autoPlay
               playsInline
               muted={isMuted}
-              className={`w-full h-full object-cover ${avatarMode === 'liveavatar' ? '' : 'hidden'}`}
+              className={`w-full h-full object-cover object-top ${avatarMode === 'liveavatar' ? '' : 'hidden'}`}
             />
 
             {avatarMode === 'connecting' && (
@@ -612,7 +612,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
               </button>
             )}
 
-            <div className="absolute bottom-3 left-3 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-xs flex items-center gap-2">
+            <div className="absolute top-3 left-3 bg-[#0d1117]/75 backdrop-blur-sm text-white px-2.5 py-1 rounded-md text-xs flex items-center gap-2 pointer-events-none">
               <span
                 className={`size-2 rounded-full ${
                   isSpeaking
@@ -643,7 +643,7 @@ export default function InterviewRoom({ sessionId, onFinish }: InterviewRoomProp
                 <span className="text-xs">Camera off</span>
               </div>
             )}
-            <div className="absolute bottom-3 left-3 bg-[#0d1117]/80 backdrop-blur-sm text-white px-3 py-1 rounded-md text-xs">
+            <div className="absolute top-3 left-3 bg-[#0d1117]/75 backdrop-blur-sm text-white px-2.5 py-1 rounded-md text-xs pointer-events-none">
               You
             </div>
           </div>

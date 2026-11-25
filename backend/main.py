@@ -13,6 +13,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, validator
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from openai import OpenAI
 from sqlalchemy import text
 from database import SessionLocal, engine, get_db
@@ -473,8 +474,13 @@ async def upload_cv(
     db.execute(text("UPDATE resumes SET is_active = false WHERE user_id = :uid"), {"uid": current_user.id})
     db.commit()
     
-    # 4. Save to Database
+    # 4. Save to Database and invalidate cached job match scores so they recalculate with the new CV
     crud.create_resume(db, current_user.id, file.filename, parsed_data, cv_text)
+    db.execute(
+        text("UPDATE job_applications SET match_score = NULL, gaps = NULL WHERE user_id = :uid"),
+        {"uid": current_user.id}
+    )
+    db.commit()
     
     # 5. Return Data to Frontend (to populate form)
     return parsed_data
@@ -859,6 +865,25 @@ async def update_job_status(
     db.refresh(job)
     return {"status": job.status}
 
+@app.delete("/api/jobs/{job_id}")
+async def delete_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a job application and detach any linked interview sessions"""
+    job = crud.get_job_application(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    db.execute(
+        text("UPDATE interview_sessions SET job_application_id = NULL WHERE job_application_id = :jid"),
+        {"jid": job_id}
+    )
+    db.delete(job)
+    db.commit()
+    return {"message": "Job application deleted", "id": job_id}
+
 @app.get("/api/jobs/{job_id}/analysis")
 async def get_job_analysis(
     job_id: int,
@@ -891,7 +916,12 @@ async def get_job_analysis(
                 })
 
         if not candidate_context:
-            raise HTTPException(status_code=400, detail="Upload a CV or fill out your Profile to calculate match score")
+            return {
+                "matchScore": None,
+                "gaps": [],
+                "needsProfile": True,
+                "message": "Upload a CV or fill out your Profile to calculate your match score."
+            }
             
         prompt = f"""
         Perform a gap analysis between this candidate profile/resume and job description.
@@ -1073,9 +1103,14 @@ async def chat_simulation(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # 1. Update transcript with user answer
+    # 1. Update transcript with user answer (include opening greeting on first turn)
     history = list(session.transcript or [])
-    if not history or history[-1]['role'] == 'assistant':
+    if not history:
+        history.append({
+            "role": "assistant",
+            "content": "Hello! I'm your HireSync AI interviewer. Let's begin. Please introduce yourself and tell me a bit about your background."
+        })
+    if history[-1]['role'] == 'assistant':
         history.append({"role": "user", "content": request.user_answer_text})
     
     # 2. AI Analysis
@@ -1137,8 +1172,9 @@ async def chat_simulation(
     # 3. Update transcript with AI question
     history.append({"role": "assistant", "content": next_question_text})
     
-    # 4. Save to DB (Direct update to avoid crud dependency issues with renamed fields)
-    session.transcript = history
+    # 4. Save to DB (flag_modified ensures SQLAlchemy persists JSONB mutation)
+    session.transcript = list(history)
+    flag_modified(session, "transcript")
     db.commit()
     db.refresh(session)
     
@@ -1177,7 +1213,7 @@ async def complete_interview_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Mark an interview session as completed"""
+    """Mark an interview session as completed, or discard it if no conversation took place"""
     session = db.query(InterviewSession).filter(
         InterviewSession.id == session_id,
         InterviewSession.user_id == current_user.id
@@ -1185,6 +1221,16 @@ async def complete_interview_session(
     
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if not session.transcript or len(session.transcript) == 0:
+        db.delete(session)
+        db.commit()
+        return {
+            "message": "Empty session discarded",
+            "session_id": session_id,
+            "deleted": True,
+            "transcript": []
+        }
     
     session.completed = True
     db.commit()
@@ -1193,8 +1239,28 @@ async def complete_interview_session(
     return {
         "message": "Session marked as completed",
         "session_id": session.id,
+        "deleted": False,
         "transcript": session.transcript
     }
+
+@app.delete("/api/interviews/sessions/{session_id}")
+async def delete_interview_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an interview session from history"""
+    session = db.query(InterviewSession).filter(
+        InterviewSession.id == session_id,
+        InterviewSession.user_id == current_user.id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    db.delete(session)
+    db.commit()
+    return {"message": "Interview session deleted", "session_id": session_id}
 
 @app.post("/api/interviews/report")
 async def get_report(

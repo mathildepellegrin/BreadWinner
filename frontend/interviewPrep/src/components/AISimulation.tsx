@@ -143,6 +143,7 @@ export function AISimulation() {
   const handleEndInterview = () => {
     setHasStarted(false);
     setSessionId(null);
+    navigate('/dashboard');
   };
 
   const toggleType = (type: InterviewType) => {
@@ -171,17 +172,15 @@ export function AISimulation() {
         {/* Header */}
         <header className="bg-[#161b22] border-b border-gray-800">
           <div className="container mx-auto px-6 py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Brain className="size-8 text-[#58a6ff]" />
-                <span className="font-semibold text-xl text-white">
-                  AI Interview Simulation
-                </span>
-              </div>
-              <Link
-                to={`/interview/${id}`}
-                className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
-              >
+          <div className="flex items-center justify-between">
+            <Link to="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+              <Brain className="size-8 text-[#58a6ff]" />
+              <span className="font-semibold text-xl text-white">HireSync</span>
+            </Link>
+            <Link
+              to={id ? `/interview/${id}` : '/dashboard'}
+              className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
+            >
                 <ArrowLeft className="size-5" />
                 <span>Back</span>
               </Link>

@@ -1,5 +1,5 @@
 import { Link, useParams, useNavigate } from 'react-router';
-import { Brain, ArrowLeft, Calendar, Briefcase, MapPin, DollarSign, Play, Building2, FileText, CheckSquare, Loader2, RefreshCw, AlertCircle, Target } from 'lucide-react';
+import { Brain, ArrowLeft, Calendar, Briefcase, MapPin, DollarSign, Play, Building2, FileText, CheckSquare, Loader2, RefreshCw, AlertCircle, Target, ExternalLink, Trash2 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 
 type TopicCategory = 'technical' | 'behavioral' | 'leetcode';
@@ -12,6 +12,7 @@ interface JobDetail {
   requirements: string[];
   benefits: string[];
   status: string;
+  url: string | null;
   location: string | null;
   salary: string | null;
   interview_date: string | null;
@@ -96,8 +97,8 @@ export function InterviewDetail() {
         navigate('/login');
         return;
       }
-      if (res.status === 400) {
-        setAnalysisNote(data.error || data.detail || 'Upload a CV or fill out your Profile to see your match score.');
+      if (res.status === 400 || data.needsProfile) {
+        setAnalysisNote(data.message || data.error || data.detail || 'Upload a CV or fill out your Profile to see your match score.');
         return;
       }
       if (!res.ok) {
@@ -217,6 +218,42 @@ export function InterviewDetail() {
     }
   };
 
+  const handleStatusChange = async (newStatus: string) => {
+    if (!job) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/jobs/${job.id}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        setJob({ ...job, status: newStatus });
+      }
+    } catch (error) {
+      console.error('Failed to update status:', error);
+    }
+  };
+
+  const handleDeleteJob = async () => {
+    if (!job || !window.confirm('Delete this job application?')) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/jobs/${job.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        navigate('/dashboard');
+      }
+    } catch (error) {
+      console.error('Failed to delete job:', error);
+    }
+  };
+
   const currentTopics = getCurrentTopics();
 
   return (
@@ -225,10 +262,10 @@ export function InterviewDetail() {
       <header className="bg-white border-b border-[#d0d7de]">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <Link to="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <Brain className="size-8 text-[#0969da]" />
               <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
-            </div>
+            </Link>
             <Link
               to="/dashboard"
               className="flex items-center gap-2 text-[#656d76] hover:text-[#1f2328] transition-colors"
@@ -244,12 +281,25 @@ export function InterviewDetail() {
       <main className="container mx-auto px-6 py-8 max-w-5xl">
         {/* Job Header */}
         <div className="bg-white border border-[#d0d7de] rounded-lg p-8 mb-8">
-          <div className="flex items-start justify-between mb-6 gap-4">
+          <div className="flex flex-wrap items-start justify-between mb-6 gap-4">
             <div>
               <h1 className="text-3xl font-bold text-[#1f2328] mb-2">
                 {job.title}
               </h1>
-              <p className="text-xl text-[#656d76]">{job.company}</p>
+              <div className="flex items-center gap-3">
+                <p className="text-xl text-[#656d76]">{job.company}</p>
+                {job.url && (
+                  <a
+                    href={job.url.startsWith('http') ? job.url : `https://${job.url}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline"
+                  >
+                    <span>Job Posting</span>
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               {analysis?.matchScore !== null && analysis?.matchScore !== undefined && (
@@ -265,11 +315,25 @@ export function InterviewDetail() {
                   {analysis.matchScore}% Match
                 </span>
               )}
-              <span
-                className={`px-4 py-2 rounded-md text-sm font-medium border ${getStatusBadgeStyle(job.status)}`}
+              <select
+                value={job.status}
+                onChange={(e) => handleStatusChange(e.target.value)}
+                aria-label="Application status"
+                className={`px-3 py-2 rounded-md text-sm font-medium border cursor-pointer focus:outline-none ${getStatusBadgeStyle(job.status)}`}
               >
-                {job.status}
-              </span>
+                <option value="Applied">Applied</option>
+                <option value="Interviewing">Interviewing</option>
+                <option value="Offer">Offer</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+              <button
+                type="button"
+                onClick={handleDeleteJob}
+                title="Delete application"
+                className="p-2 text-[#656d76] hover:text-[#cf222e] border border-[#d0d7de] rounded-md hover:bg-[#ffebe9] transition-colors cursor-pointer"
+              >
+                <Trash2 className="size-4" />
+              </button>
             </div>
           </div>
 

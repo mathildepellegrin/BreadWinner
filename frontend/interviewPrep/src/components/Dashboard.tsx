@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router';
-import { Brain, LogOut, Calendar, CheckCircle, Circle, Plus, User, Loader2, ChevronDown, X } from 'lucide-react';
+import { Brain, LogOut, Calendar, CheckCircle, Circle, Plus, User, Loader2, ChevronDown, Trash2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 interface Job {
@@ -22,6 +22,8 @@ interface InterviewSession {
   transcript?: { role: string; content: string }[];
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export function Dashboard() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -39,10 +41,10 @@ export function Dashboard() {
         }
 
         const headers = { 'Authorization': `Bearer ${token}` };
-        
+
         const [jobsRes, interviewsRes] = await Promise.all([
-          fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs`, { headers }),
-          fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/interviews/history`, { headers })
+          fetch(`${API_URL}/api/jobs`, { headers }),
+          fetch(`${API_URL}/api/interviews/history`, { headers })
         ]);
 
         if (jobsRes.status === 401 || interviewsRes.status === 401) {
@@ -67,6 +69,42 @@ export function Dashboard() {
     navigate('/login');
   };
 
+  const handleDeleteJob = async (e: React.MouseEvent, jobId: number) => {
+    e.stopPropagation();
+    if (!window.confirm('Delete this job application?')) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/jobs/${jobId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setJobs((prev) => prev.filter((j) => j.id !== jobId));
+      }
+    } catch (error) {
+      console.error('Failed to delete job:', error);
+    }
+  };
+
+  const handleDeleteSession = async (e: React.MouseEvent, sessionId: number) => {
+    e.stopPropagation();
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/interviews/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setInterviews((prev) => prev.filter((s) => s.id !== sessionId));
+        if (expandedSessionId === sessionId) {
+          setExpandedSessionId(null);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete interview session:', error);
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleDateString('en-US', {
@@ -74,6 +112,19 @@ export function Dashboard() {
       day: 'numeric',
       year: 'numeric',
     });
+  };
+
+  const getStatusDotClass = (status: string) => {
+    switch (status) {
+      case 'Offer':
+        return 'text-[#1a7f37] fill-[#1a7f37]';
+      case 'Rejected':
+        return 'text-[#cf222e] fill-[#cf222e]';
+      case 'Interviewing':
+        return 'text-[#0969da] fill-[#0969da]';
+      default:
+        return 'text-[#9a6700] fill-[#9a6700]';
+    }
   };
 
   if (loading) {
@@ -90,10 +141,10 @@ export function Dashboard() {
       <header className="bg-white border-b border-[#d0d7de]">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <Link to="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <Brain className="size-8 text-[#0969da]" />
               <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
-            </div>
+            </Link>
             <div className="flex items-center gap-4">
               <Link
                 to="/profile"
@@ -156,29 +207,27 @@ export function Dashboard() {
                     <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Applied</th>
                     <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Match</th>
                     <th className="text-left px-6 py-3 text-sm font-semibold text-[#656d76]">Status</th>
+                    <th className="text-right px-6 py-3 text-sm font-semibold text-[#656d76]"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#d0d7de]">
                   {jobs.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-8 text-center text-[#656d76]">
+                      <td colSpan={6} className="px-6 py-8 text-center text-[#656d76]">
                         No active job applications found. Click "Add Interview" to get started.
                       </td>
                     </tr>
                   ) : jobs.map((job) => (
                     <tr
                       key={job.id}
-                      className="hover:bg-[#f6f8fa] transition-colors"
+                      onClick={() => navigate(`/interview/${job.id}`)}
+                      className="hover:bg-[#f6f8fa] transition-colors cursor-pointer"
                     >
-                      <td className="px-6 py-4">
-                        <Link to={`/interview/${job.id}`} className="font-semibold text-[#1f2328] hover:text-[#0969da] hover:underline">
-                          {job.company}
-                        </Link>
+                      <td className="px-6 py-4 font-semibold text-[#1f2328]">
+                        {job.company}
                       </td>
-                      <td className="px-6 py-4">
-                        <Link to={`/interview/${job.id}`} className="text-[#656d76] hover:text-[#1f2328]">
-                          {job.title}
-                        </Link>
+                      <td className="px-6 py-4 text-[#656d76]">
+                        {job.title}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2 text-[#656d76]">
@@ -188,18 +237,29 @@ export function Dashboard() {
                       </td>
                       <td className="px-6 py-4">
                         <span className={`inline-block px-3 py-1 rounded-md text-sm font-medium ${
-                          (job.matchScore || 0) >= 80 ? 'bg-[#dafbe1] text-[#1a7f37] border border-[#1a7f37]/30' :
-                          (job.matchScore || 0) >= 50 ? 'bg-[#fff8c5] text-[#9a6700] border border-[#9a6700]/30' :
+                          job.matchScore !== null && job.matchScore >= 80 ? 'bg-[#dafbe1] text-[#1a7f37] border border-[#1a7f37]/30' :
+                          job.matchScore !== null && job.matchScore >= 50 ? 'bg-[#fff8c5] text-[#9a6700] border border-[#9a6700]/30' :
+                          job.matchScore !== null ? 'bg-[#ffebe9] text-[#cf222e] border border-[#cf222e]/30' :
                           'bg-[#f6f8fa] text-[#656d76] border border-[#d0d7de]'
                         }`}>
-                          {job.matchScore ? `${job.matchScore}% Match` : 'N/A'}
+                          {job.matchScore !== null && job.matchScore !== undefined ? `${job.matchScore}% Match` : 'N/A'}
                         </span>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <Circle className="size-4 text-[#9a6700] fill-[#9a6700]" />
+                          <Circle className={`size-3.5 ${getStatusDotClass(job.status)}`} />
                           <span className="text-sm text-[#656d76]">{job.status}</span>
                         </div>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteJob(e, job.id)}
+                          title="Delete application"
+                          className="p-1.5 text-[#656d76] hover:text-[#cf222e] rounded hover:bg-[#ffebe9] transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -227,72 +287,100 @@ export function Dashboard() {
                 No interview sessions recorded yet.
               </div>
             ) : (
-              interviews.map((session) => (
-                <div
-                  key={session.id}
-                  className="bg-white border border-[#d0d7de] rounded-lg overflow-hidden"
-                >
-                  <button
-                    onClick={() => setExpandedSessionId(expandedSessionId === session.id ? null : session.id)}
-                    className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#f6f8fa] transition-colors"
+              interviews.map((session) => {
+                const hasMessages = Array.isArray(session.transcript) && session.transcript.length > 0;
+                const isExpanded = expandedSessionId === session.id;
+                return (
+                  <div
+                    key={session.id}
+                    className="bg-white border border-[#d0d7de] rounded-lg overflow-hidden"
                   >
-                    <div className="flex items-center gap-6 flex-1 text-left">
-                      <div className="flex-1">
-                        <div className="font-semibold text-[#1f2328]">{session.company || 'Unknown Company'}</div>
-                        <div className="text-sm text-[#656d76]">{session.job_title || 'General Practice'}</div>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setExpandedSessionId(isExpanded ? null : session.id);
+                        }
+                      }}
+                      className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#f6f8fa] transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-6 flex-1 text-left">
+                        <div className="flex-1">
+                          <div className="font-semibold text-[#1f2328]">{session.company || 'General Practice'}</div>
+                          <div className="text-sm text-[#656d76]">{session.job_title || 'Mock Interview'}</div>
+                        </div>
+                        <div className="text-sm text-[#656d76]">{formatDate(session.created_at)}</div>
+                        <span className="inline-block px-3 py-1 bg-[#f6f8fa] text-[#656d76] border border-[#d0d7de] rounded-md text-sm capitalize">
+                          {session.mode}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          {session.completed ? (
+                            <>
+                              <CheckCircle className="size-4 text-[#1a7f37]" />
+                              <span className="text-sm text-[#656d76]">Completed</span>
+                            </>
+                          ) : (
+                            <>
+                              <Circle className="size-4 text-[#9a6700]" />
+                              <span className="text-sm text-[#656d76]">In Progress</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-sm text-[#656d76]">{formatDate(session.created_at)}</div>
-                      <span className="inline-block px-3 py-1 bg-[#f6f8fa] text-[#656d76] border border-[#d0d7de] rounded-md text-sm capitalize">
-                        {session.mode}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {session.completed ? (
-                          <>
-                            <CheckCircle className="size-4 text-[#1a7f37]" />
-                            <span className="text-sm text-[#656d76]">Completed</span>
-                          </>
+                      <div className="flex items-center gap-3 ml-4">
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteSession(e, session.id)}
+                          title="Delete session"
+                          className="p-1.5 text-[#656d76] hover:text-[#cf222e] rounded hover:bg-[#ffebe9] transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                        <ChevronDown
+                          className={`size-5 text-[#656d76] transition-transform ${
+                            isExpanded ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Expanded Transcript View (also handles empty sessions clearly) */}
+                    {isExpanded && (
+                      <div className="border-t border-[#d0d7de] p-6 bg-[#f6f8fa]">
+                        <h4 className="font-semibold text-[#1f2328] mb-4">Interview Transcript</h4>
+                        {hasMessages ? (
+                          <div className="space-y-4 max-h-96 overflow-y-auto">
+                            {session.transcript!.map((entry, idx) => (
+                              <div
+                                key={idx}
+                                className={`p-3 rounded-md ${
+                                  entry.role === 'user'
+                                    ? 'bg-[#ddf4ff] border border-[#54aeff] text-[#1f2328]'
+                                    : 'bg-[#dafbe1] border border-[#56d364] text-[#1f2328]'
+                                }`}
+                              >
+                                <div className="font-semibold text-sm mb-1">
+                                  {entry.role === 'user' ? 'You' : 'HireSync Interviewer'}
+                                </div>
+                                <div className="text-sm whitespace-pre-wrap break-words">
+                                  {entry.content}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         ) : (
-                          <>
-                            <Circle className="size-4 text-[#9a6700]" />
-                            <span className="text-sm text-[#656d76]">In Progress</span>
-                          </>
+                          <p className="text-sm text-[#656d76] italic">
+                            This interview chat is empty — no answers were recorded during this session.
+                          </p>
                         )}
                       </div>
-                    </div>
-                    <ChevronDown
-                      className={`size-5 text-[#656d76] transition-transform ${
-                        expandedSessionId === session.id ? 'rotate-180' : ''
-                      }`}
-                    />
-                  </button>
-
-                  {/* Expanded Transcript View */}
-                  {expandedSessionId === session.id && session.transcript && session.transcript.length > 0 && (
-                    <div className="border-t border-[#d0d7de] p-6 bg-[#f6f8fa]">
-                      <h4 className="font-semibold text-[#1f2328] mb-4">Interview Transcript</h4>
-                      <div className="space-y-4 max-h-96 overflow-y-auto">
-                        {session.transcript.map((entry, idx) => (
-                          <div
-                            key={idx}
-                            className={`p-3 rounded-md ${
-                              entry.role === 'user'
-                                ? 'bg-[#ddf4ff] border border-[#54aeff] text-[#1f2328]'
-                                : 'bg-[#dafbe1] border border-[#56d364] text-[#1f2328]'
-                            }`}
-                          >
-                            <div className="font-semibold text-sm mb-1">
-                              {entry.role === 'user' ? '👤 You' : '🤖 Interviewer'}
-                            </div>
-                            <div className="text-sm whitespace-pre-wrap break-words">
-                              {entry.content}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </section>

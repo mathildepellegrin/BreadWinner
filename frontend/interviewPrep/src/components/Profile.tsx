@@ -130,6 +130,8 @@ export function Profile() {
       console.error("CV Upload Error:", error);
       setUploadStatus('idle');
       alert(`Error: ${error instanceof Error ? error.message : "Failed to parse CV"}`);
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -161,6 +163,7 @@ export function Profile() {
       });
 
       if (res.ok) {
+        setIsEditing(false);
         alert('Profile saved successfully!');
       } else {
         const errorData = await res.json().catch(() => ({}));
@@ -188,10 +191,10 @@ export function Profile() {
       <header className="bg-white border-b border-[#d0d7de]">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <Link to="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <Brain className="size-8 text-[#0969da]" />
               <span className="font-semibold text-xl text-[#1f2328]">HireSync</span>
-            </div>
+            </Link>
             <Link
               to="/dashboard"
               className="flex items-center gap-2 text-[#656d76] hover:text-[#1f2328] transition-colors"
